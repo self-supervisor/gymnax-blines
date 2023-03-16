@@ -10,6 +10,7 @@ import numpy as np
 import optax
 import tqdm
 from flax.training.train_state import TrainState
+
 import wandb
 
 STR_TO_JAX_ARR = {
@@ -200,13 +201,6 @@ def policy(
     return value, pi
 
 
-# def update_rnd(novelty_signal, obs):
-#     obs = np.array(obs)
-#     for i in range(obs.shape[0]):
-#         novelty_signal[obs[i][0], obs[i][1]] += 1
-#     return novelty_signal
-
-
 def update_values(values, obs, new_values):
     obs = np.array(obs)
     for i in range(obs.shape[0]):
@@ -219,6 +213,22 @@ def compute_novelty(obs, rnd_model, rnd_params, distiller_model, distiller_param
     distiller_pred = distiller_model.apply(distiller_params, obs)
     novelty = jnp.mean((rnd_pred - distiller_pred) ** 2, axis=1)
     return novelty
+
+
+def get_optimiser(config):
+    num_steps_warm_up = int(config.num_train_steps * config.lr_warmup)
+    schedule_fn = optax.linear_schedule(
+        init_value=-float(config.lr_begin),
+        end_value=-float(config.lr_end),
+        transition_steps=num_steps_warm_up,
+    )
+
+    tx = optax.chain(
+        optax.clip_by_global_norm(config.max_grad_norm),
+        optax.scale_by_adam(eps=1e-5),
+        optax.scale_by_schedule(schedule_fn),
+    )
+    return tx
 
 
 def train_ppo(
@@ -235,19 +245,7 @@ def train_ppo(
 ):
     """Training loop for PPO based on https://github.com/bmazoure/ppo_jax."""
     num_total_epochs = int(config.num_train_steps // config.num_train_envs + 1)
-    num_steps_warm_up = int(config.num_train_steps * config.lr_warmup)
-    schedule_fn = optax.linear_schedule(
-        init_value=-float(config.lr_begin),
-        end_value=-float(config.lr_end),
-        transition_steps=num_steps_warm_up,
-    )
-
-    tx = optax.chain(
-        optax.clip_by_global_norm(config.max_grad_norm),
-        optax.scale_by_adam(eps=1e-5),
-        optax.scale_by_schedule(schedule_fn),
-    )
-
+    tx = get_optimiser(config)
     PPO_train_state = TrainState.create(
         apply_fn=PPO_model.apply, params=PPO_params, tx=tx,
     )
@@ -339,7 +337,7 @@ def train_ppo(
                 RND_train_state,
                 distiller_train_state,
                 rng_update,
-            ) = update_rnd(
+            ) = update_RND(
                 RND_train_state,
                 distiller_train_state,
                 batch_manager.get(batch),

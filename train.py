@@ -1,10 +1,11 @@
-import jax
+from distutils.util import strtobool
 
+import jax
+import numpy as np
+
+import wandb
 from utils.helpers import load_config, save_pkl_object
 from utils.models import get_model_ready
-import wandb
-import numpy as np
-from distutils.util import strtobool
 
 
 def main(config, mle_log, scale, count_switch, log_ext="", use_wandb: bool = False):
