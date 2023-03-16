@@ -200,11 +200,11 @@ def policy(
     return value, pi
 
 
-def update_rnd(novelty_signal, obs):
-    obs = np.array(obs)
-    for i in range(obs.shape[0]):
-        novelty_signal[obs[i][0], obs[i][1]] += 1
-    return novelty_signal
+# def update_rnd(novelty_signal, obs):
+#     obs = np.array(obs)
+#     for i in range(obs.shape[0]):
+#         novelty_signal[obs[i][0], obs[i][1]] += 1
+#     return novelty_signal
 
 
 def update_values(values, obs, new_values):
@@ -215,9 +215,9 @@ def update_values(values, obs, new_values):
 
 
 def compute_novelty(obs, rnd_model, rnd_params, distiller_model, distiller_params):
-    rnd_pred = rnd_model.apply(obs, rnd_params)
-    distiller_pred = distiller_model.apply(obs, distiller_params)
-    novelty = jnp.mean((rnd_pred - distiller_pred) ** 2)
+    rnd_pred = rnd_model.apply(rnd_params, obs)
+    distiller_pred = distiller_model.apply(distiller_params, obs)
+    novelty = jnp.mean((rnd_pred - distiller_pred) ** 2, axis=1)
     return novelty
 
 

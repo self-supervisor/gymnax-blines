@@ -6,11 +6,21 @@ from evosax import NetworkMapper
 from tensorflow_probability.substrates import jax as tfp
 
 
+def build_RND_models(obs_shape, rng_rnd, rng_distiller):
+    RND_model = MLP()
+    RND_params = RND_model.init(rng_rnd, jnp.zeros(obs_shape))
+
+    distiller_model = MLP()
+    distiller_params = distiller_model.init(rng_distiller, jnp.zeros(obs_shape))
+    return RND_model, RND_params, distiller_model, distiller_params
+
+
 def get_model_ready(rng, config, scale, novelty_switch, speed=False):
     """Instantiate a model according to obs shape of environment."""
     # Get number of desired output units
     env, env_params = gymnax.make(config.env_name, **config.env_kwargs)
 
+    rng, rng_rnd, rng_distiller = jax.random.split(rng, 3)
     # Instantiate model class (flax-based)
     if config.train_type == "ES":
         model = NetworkMapper[config.network_name](
@@ -57,11 +67,10 @@ def get_model_ready(rng, config, scale, novelty_switch, speed=False):
             rng, jnp.zeros(obs_shape), model.initialize_carry(), rng=rng
         )
 
-    RND_model = MLP()
-    RND_params = RND_model.init(rng, jnp.zeros(obs_shape))
+    RND_model, RND_params, distiller_model, distiller_params = build_RND_models(
+        obs_shape, rng_model, rng_distiller
+    )
 
-    distiller_model = MLP()
-    distiller_params = distiller_model.init(rng, jnp.zeros(obs_shape))
     return (
         PPO_model,
         PPO_params,
@@ -112,18 +121,18 @@ class MLP(nn.Module):
     @nn.compact
     def __call__(self, x):
         for _ in range(self.num_hidden_layers):
-            x = nn.Dense(
-                features=self.num_hidden_units,
-                kernel_init=default_mlp_init(),
-                bias_init=default_mlp_init(),
-            )(x)
-            x = nn.activation_by_name(self.hidden_activation)(x)
+            x = nn.relu(
+                nn.Dense(
+                    features=self.num_hidden_units,
+                    kernel_init=default_mlp_init(),
+                    bias_init=default_mlp_init(),
+                )(x)
+            )
         x = nn.Dense(
             features=self.num_output_units,
             kernel_init=default_mlp_init(),
             bias_init=default_mlp_init(),
         )(x)
-        x = nn.activation_by_name(self.output_activation)(x)
         return x
 
 
