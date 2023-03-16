@@ -234,7 +234,6 @@ def train_ppo(
     use_wandb,
 ):
     """Training loop for PPO based on https://github.com/bmazoure/ppo_jax."""
-    novelty_signal = np.zeros((13, 13))
     num_total_epochs = int(config.num_train_steps // config.num_train_envs + 1)
     num_steps_warm_up = int(config.num_train_steps * config.lr_warmup)
     schedule_fn = optax.linear_schedule(
