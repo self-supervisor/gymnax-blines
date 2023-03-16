@@ -1,11 +1,11 @@
 train_config:
   train_type: "PPO"
-  num_train_steps: 200000
+  num_train_steps: 240000
   evaluate_every_epochs: 500
 
   env_name: "FourRooms-misc"
   env_kwargs:
-    use_visual_obs: true
+    use_visual_obs: false
   env_params:
     resample_init_pos: true
     resample_goal_pos: false

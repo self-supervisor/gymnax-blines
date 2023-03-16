@@ -8,14 +8,11 @@ def speed(
 ):
     import jax
     import numpy as np
-    from utils.models import get_model_ready
+
+    from utils.benchmark import (speed_gymnax_network, speed_gymnax_random,
+                                 speed_numpy_network, speed_numpy_random)
     from utils.helpers import load_config
-    from utils.benchmark import (
-        speed_numpy_random,
-        speed_numpy_network,
-        speed_gymnax_random,
-        speed_gymnax_network,
-    )
+    from utils.models import get_model_ready
 
     # Get the policy and parameters (if not random)
     configs = load_config(f"agents/{env_name}/es.yaml")

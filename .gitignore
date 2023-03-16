@@ -2,6 +2,7 @@ search*
 speed_exec.sh
 speed/
 evaluate/
+wandb/
 old
 templates
 .sync-config.cson

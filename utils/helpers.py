@@ -1,7 +1,8 @@
 def load_config(config_fname, seed_id=0, lrate=None):
     """Load training configuration and random seed of experiment."""
-    import yaml
     import re
+
+    import yaml
     from dotmap import DotMap
 
     def load_yaml(config_fname: str) -> dict:
