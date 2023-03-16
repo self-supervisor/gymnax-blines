@@ -13,7 +13,14 @@ def main(config, mle_log, scale, count_switch, log_ext="", use_wandb: bool = Fal
     # Setup the model architecture
     rng, rng_init = jax.random.split(rng)
 
-    model, params = get_model_ready(rng_init, config, scale, count_switch)
+    (
+        PPO_model,
+        PPO_params,
+        RND_model,
+        RND_params,
+        distiller_model,
+        distiller_params,
+    ) = get_model_ready(rng_init, config, scale, count_switch)
 
     config.scale = scale
     config.count_switch = count_switch
@@ -30,7 +37,16 @@ def main(config, mle_log, scale, count_switch, log_ext="", use_wandb: bool = Fal
 
     # Log and store the results.
     log_steps, log_return, network_ckpt = train_fn(
-        rng, config, model, params, mle_log, use_wandb
+        rng,
+        config,
+        PPO_model,
+        PPO_params,
+        RND_model,
+        RND_params,
+        distiller_model,
+        distiller_params,
+        mle_log,
+        use_wandb,
     )
 
     if use_wandb:

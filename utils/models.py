@@ -6,7 +6,7 @@ from evosax import NetworkMapper
 from tensorflow_probability.substrates import jax as tfp
 
 
-def get_model_ready(rng, config, scale, count_switch, speed=False):
+def get_model_ready(rng, config, scale, novelty_switch, speed=False):
     """Instantiate a model according to obs shape of environment."""
     # Get number of desired output units
     env, env_params = gymnax.make(config.env_name, **config.env_kwargs)
@@ -18,11 +18,11 @@ def get_model_ready(rng, config, scale, count_switch, speed=False):
         )
     elif config.train_type == "PPO":
         if config.network_name == "Categorical-MLP":
-            model = CategoricalSeparateMLP(
+            PPO_model = CategoricalSeparateMLP(
                 **config.network_config,
                 num_output_units=env.num_actions,
                 scale=scale,
-                count_switch=count_switch,
+                novelty_switch=novelty_switch,
             )
         elif config.network_name == "Gaussian-MLP":
             model = GaussianSeparateMLP(
@@ -45,7 +45,7 @@ def get_model_ready(rng, config, scale, count_switch, speed=False):
     obs_shape = env.observation_space(env_params).shape
     counts_shape = env.get_counts().shape
     if config.network_name != "LSTM" or speed:
-        params = model.init(
+        PPO_params = PPO_model.init(
             rng,
             jnp.zeros(obs_shape),
             jnp.zeros(counts_shape),
@@ -53,10 +53,23 @@ def get_model_ready(rng, config, scale, count_switch, speed=False):
             rng=rng,
         )
     else:
-        params = model.init(
+        PPO_params = PPO_model.init(
             rng, jnp.zeros(obs_shape), model.initialize_carry(), rng=rng
         )
-    return model, params
+
+    RND_model = MLP()
+    RND_params = RND_model.init(rng, jnp.zeros(obs_shape))
+
+    distiller_model = MLP()
+    distiller_params = distiller_model.init(rng, jnp.zeros(obs_shape))
+    return (
+        PPO_model,
+        PPO_params,
+        RND_model,
+        RND_params,
+        distiller_model,
+        distiller_params,
+    )
 
 
 def default_mlp_init():
@@ -89,6 +102,31 @@ class LFF(nn.Module):
         return jnp.pi * jnp.sin(self.dense(x) - 1)
 
 
+class MLP(nn.Module):
+    num_hidden_units: int = 64
+    num_hidden_layers: int = 2
+    hidden_activation: str = "relu"
+    output_activation: str = "identity"
+    num_output_units: int = 64
+
+    @nn.compact
+    def __call__(self, x):
+        for _ in range(self.num_hidden_layers):
+            x = nn.Dense(
+                features=self.num_hidden_units,
+                kernel_init=default_mlp_init(),
+                bias_init=default_mlp_init(),
+            )(x)
+            x = nn.activation_by_name(self.hidden_activation)(x)
+        x = nn.Dense(
+            features=self.num_output_units,
+            kernel_init=default_mlp_init(),
+            bias_init=default_mlp_init(),
+        )(x)
+        x = nn.activation_by_name(self.output_activation)(x)
+        return x
+
+
 class CategoricalSeparateMLP(nn.Module):
     """Split Actor-Critic Architecture for PPO."""
 
@@ -101,10 +139,10 @@ class CategoricalSeparateMLP(nn.Module):
     model_name: str = "separate-mlp"
     flatten_2d: bool = False  # Catch case
     flatten_3d: bool = False  # Rooms/minatar case
-    count_switch: int = int(2e3)
+    novelty_switch: int = int(2e3)
 
     @nn.compact
-    def __call__(self, x, counts, high_low_or_mixed, rng):
+    def __call__(self, x, novelty_vector, high_low_or_mixed, rng):
         if self.flatten_2d and len(x.shape) == 2:
             x = x.reshape(-1)
         if self.flatten_2d and len(x.shape) > 2:
@@ -113,13 +151,6 @@ class CategoricalSeparateMLP(nn.Module):
             x = x.reshape(-1)
         if self.flatten_3d and len(x.shape) > 3:
             x = x.reshape(x.shape[0], -1)
-
-        if len(x.shape) > 1:
-            positions = x[:, :2].astype(int)
-            extracted_counts = counts[positions[:, 0], positions[:, 1]]
-        else:
-            positions = x[:2].astype(int)
-            extracted_counts = counts[positions[0], positions[1]]
 
         x = (x / 13) - 0.5
         if len(x.shape) > 1:
@@ -183,10 +214,10 @@ class CategoricalSeparateMLP(nn.Module):
             v_low = jnp.copy(v_low_frequency)
             v_high = jnp.copy(v_high_frequency)
             v_low_frequency = v_low_frequency * (
-                extracted_counts < self.count_switch
+                novelty_vector < self.novelty_switch
             ).astype(int)
             v_high_frequency = v_high_frequency * (
-                extracted_counts > self.count_switch
+                novelty_vector > self.novelty_switch
             ).astype(int)
             v_mixed = v_high_frequency + v_low_frequency
             v = (
@@ -199,10 +230,10 @@ class CategoricalSeparateMLP(nn.Module):
             v_high = jnp.copy(v_high_frequency)
 
             v_low_frequency = v_low_frequency * jnp.expand_dims(
-                (extracted_counts < self.count_switch).astype(int), 1
+                (novelty_vector < self.novelty_switch).astype(int), 1
             )
             v_high_frequency = v_high_frequency * jnp.expand_dims(
-                (extracted_counts > self.count_switch).astype(int), 1
+                (novelty_vector > self.novelty_switch).astype(int), 1
             )
             v_mixed = v_high_frequency + v_low_frequency
             v = (

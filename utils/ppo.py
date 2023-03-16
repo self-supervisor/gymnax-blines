@@ -117,7 +117,7 @@ class RolloutManager(object):
         self,
         train_state: TrainState,
         obs: jnp.ndarray,
-        counts: jnp.ndarray,
+        novelty_signal: jnp.ndarray,
         low_mixed_or_high: jnp.ndarray,
         rng: jax.random.PRNGKey,
     ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jax.random.PRNGKey]:
@@ -125,7 +125,7 @@ class RolloutManager(object):
             train_state.apply_fn,
             train_state.params,
             obs,
-            counts,
+            novelty_signal,
             low_mixed_or_high,
             rng,
         )
@@ -144,7 +144,7 @@ class RolloutManager(object):
         )
 
     @partial(jax.jit, static_argnums=(0, 3))
-    def batch_evaluate(self, rng_input, train_state, num_envs, counts):
+    def batch_evaluate(self, rng_input, train_state, num_envs, novelty_signal):
         """Rollout an episode with lax.scan."""
         # Reset the environment
         rng_reset, rng_episode = jax.random.split(rng_input)
@@ -155,7 +155,7 @@ class RolloutManager(object):
             obs, state, train_state, rng, cum_reward, valid_mask = state_input
             rng, rng_step, rng_net = jax.random.split(rng, 3)
             action, _, _, rng = self.select_action(
-                train_state, obs, counts, STR_TO_JAX_ARR["mixed"], rng_net
+                train_state, obs, novelty_signal, STR_TO_JAX_ARR["mixed"], rng_net
             )
             next_o, next_s, reward, done, _ = self.batch_step(
                 jax.random.split(rng_step, num_envs), state, action.squeeze(),
@@ -192,19 +192,19 @@ def policy(
     apply_fn: Callable[..., Any],
     params: flax.core.frozen_dict.FrozenDict,
     obs: jnp.ndarray,
-    counts: jnp.ndarray,
+    novelty_signal: jnp.ndarray,
     low_mixed_or_high: jnp.ndarray,
     rng,
 ):
-    value, pi = apply_fn(params, obs, counts, low_mixed_or_high, rng)
+    value, pi = apply_fn(params, obs, novelty_signal, low_mixed_or_high, rng)
     return value, pi
 
 
-def update_counts(counts, obs):
+def update_rnd(novelty_signal, obs):
     obs = np.array(obs)
     for i in range(obs.shape[0]):
-        counts[obs[i][0], obs[i][1]] += 1
-    return counts
+        novelty_signal[obs[i][0], obs[i][1]] += 1
+    return novelty_signal
 
 
 def update_values(values, obs, new_values):
@@ -214,10 +214,27 @@ def update_values(values, obs, new_values):
     return values
 
 
-def train_ppo(rng, config, model, params, mle_log, use_wandb):
+def compute_novelty(obs, rnd_model, rnd_params, distiller_model, distiller_params):
+    rnd_pred = rnd_model.apply(obs, rnd_params)
+    distiller_pred = distiller_model.apply(obs, distiller_params)
+    novelty = jnp.mean((rnd_pred - distiller_pred) ** 2)
+    return novelty
+
+
+def train_ppo(
+    rng,
+    config,
+    PPO_model,
+    PPO_params,
+    RND_model,
+    RND_params,
+    distiller_model,
+    distiller_params,
+    mle_log,
+    use_wandb,
+):
     """Training loop for PPO based on https://github.com/bmazoure/ppo_jax."""
-    counts = np.zeros((13, 13))
-    values = np.zeros((13, 13))
+    novelty_signal = np.zeros((13, 13))
     num_total_epochs = int(config.num_train_steps // config.num_train_envs + 1)
     num_steps_warm_up = int(config.num_train_steps * config.lr_warmup)
     schedule_fn = optax.linear_schedule(
@@ -232,10 +249,18 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
         optax.scale_by_schedule(schedule_fn),
     )
 
-    train_state = TrainState.create(apply_fn=model.apply, params=params, tx=tx,)
+    PPO_train_state = TrainState.create(
+        apply_fn=PPO_model.apply, params=PPO_params, tx=tx,
+    )
+    RND_train_state = TrainState.create(
+        apply_fn=RND_model.apply, params=RND_params, tx=tx,
+    )
+    distiller_train_state = TrainState.create(
+        apply_fn=distiller_model.apply, params=distiller_params, tx=tx,
+    )
     # Setup the rollout manager -> Collects data in vmapped-fashion over envs
     rollout_manager = RolloutManager(
-        model, config.env_name, config.env_kwargs, config.env_params
+        PPO_model, config.env_name, config.env_kwargs, config.env_params
     )
 
     batch_manager = BatchManager(
@@ -255,10 +280,10 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
         batch,
         rng: jax.random.PRNGKey,
         num_train_envs: int,
-        counts: jnp.ndarray,
+        novelty_signal: jnp.ndarray,
     ):
         action, log_pi, value, new_key = rollout_manager.select_action(
-            train_state, obs, counts, STR_TO_JAX_ARR["mixed"], rng
+            train_state, obs, novelty_signal, STR_TO_JAX_ARR["mixed"], rng
         )
         # print(action.shape)
         new_key, key_step = jax.random.split(new_key)
@@ -281,21 +306,24 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
     log_steps, log_return = [], []
     t = tqdm.tqdm(range(1, num_total_epochs + 1), desc="PPO", leave=True)
     for step in t:
-        train_state, obs, state, batch, new_values, rng_step = get_transition(
-            train_state,
+        novelty_signal = compute_novelty(
+            obs, RND_model, RND_params, distiller_model, distiller_params
+        )
+        PPO_train_state, obs, state, batch, new_values, rng_step = get_transition(
+            PPO_train_state,
             obs,
             state,
             batch,
             rng_step,
             config.num_train_envs,
-            jnp.array(counts),
+            novelty_signal,
         )
-        update_counts(counts, obs)
-        update_values(values, obs, new_values)
+        # update_novelty_signal(novelty_signal, obs)
+        # update_values(values, obs, new_values)
         total_steps += config.num_train_envs
         if step % (config.n_steps + 1) == 0:
-            metric_dict, train_state, rng_update = update(
-                train_state,
+            metric_dict, PPO_train_state, rng_update = update(
+                PPO_train_state,
                 batch_manager.get(batch),
                 config.num_train_envs,
                 config.n_steps,
@@ -305,14 +333,32 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
                 config.entropy_coeff,
                 config.critic_coeff,
                 rng_update,
-                counts,
+                novelty_signal,
+            )
+            (
+                metric_dict,
+                RND_train_state,
+                distiller_train_state,
+                rng_update,
+            ) = update_rnd(
+                RND_train_state,
+                distiller_train_state,
+                batch_manager.get(batch),
+                config.num_train_envs,
+                config.n_steps,
+                config.n_minibatch,
+                config.epoch_ppo,
+                config.clip_eps,
+                config.entropy_coeff,
+                config.critic_coeff,
+                rng_update,
             )
             batch = batch_manager.reset()
 
         if (step + 1) % config.evaluate_every_epochs == 0:
             rng, rng_eval = jax.random.split(rng)
             rewards = rollout_manager.batch_evaluate(
-                rng_eval, train_state, config.num_test_rollouts, counts
+                rng_eval, PPO_train_state, config.num_test_rollouts, novelty_signal
             )
 
             log_steps.append(total_steps)
@@ -320,34 +366,45 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
             t.set_description(f"R: {str(rewards)}")
             t.refresh()
             log_value_predictions(
-                use_wandb, model, train_state, rollout_manager, rng, counts
+                use_wandb, PPO_model, PPO_train_state, rollout_manager, rng,
             )
 
-            model.apply(train_state.params, obs, counts, STR_TO_JAX_ARR["mixed"], rng)
+            PPO_model.apply(
+                PPO_train_state.params,
+                obs,
+                novelty_signal,
+                STR_TO_JAX_ARR["mixed"],
+                rng,
+            )
             if mle_log is not None:
                 mle_log.update(
                     {"num_steps": total_steps},
                     {"return": rewards},
-                    model=train_state.params,
+                    model=PPO_train_state.params,
                     save=True,
                 )
 
     return (
         log_steps,
         log_return,
-        train_state.params,
+        PPO_train_state.params,
     )
 
 
 def log_value_predictions(
-    use_wandb: bool, model, train_state, rollout_manager, rng, counts: np.ndarray,
+    use_wandb: bool,
+    model,
+    train_state,
+    rollout_manager,
+    rng,
+    novelty_signal: np.ndarray,
 ) -> None:
     for key in STR_TO_JAX_ARR.keys():
         values = np.zeros((13, 13))
         preds = model.apply(
             train_state.params,
             rollout_manager.env.coords,
-            counts,
+            novelty_signal,
             STR_TO_JAX_ARR[key],
             rng,
         )
@@ -374,15 +431,29 @@ def log_value_predictions(
     if use_wandb:
         fig = go.Figure(
             data=go.Heatmap(
-                z=counts, x=np.arange(0, 13), y=np.arange(0, 13), colorscale="Viridis",
+                z=novelty_signal,
+                x=np.arange(0, 13),
+                y=np.arange(0, 13),
+                colorscale="Viridis",
             )
         )
-        wandb.log({"counts": fig})
+        wandb.log({"novelty_signal": fig})
 
 
 @jax.jit
 def flatten_dims(x):
     return x.swapaxes(0, 1).reshape(x.shape[0] * x.shape[1], *x.shape[2:])
+
+
+def loss_distiller(
+    params_model: flax.core.frozen_dict.FrozenDict,
+    apply_fn: Callable[..., Any],
+    obs: jnp.ndarray,
+    target: jnp.ndarray,
+):
+    preds = apply_fn(params_model, obs)
+    loss = jnp.square(preds - target).mean()
+    return loss
 
 
 def loss_actor_and_critic(
@@ -397,11 +468,13 @@ def loss_actor_and_critic(
     clip_eps: float,
     critic_coeff: float,
     entropy_coeff: float,
-    counts: jnp.ndarray,
+    novelty_signal: jnp.ndarray,
     high_low_or_mixed: jnp.ndarray,
 ) -> jnp.ndarray:
 
-    value_pred, pi = apply_fn(params_model, obs, counts, high_low_or_mixed, rng=None)
+    value_pred, pi = apply_fn(
+        params_model, obs, novelty_signal, high_low_or_mixed, rng=None
+    )
     value_pred = value_pred[:, 0]
 
     # TODO: Figure out why training without 0 breaks categorical model
@@ -442,7 +515,7 @@ def update(
     entropy_coeff: float,
     critic_coeff: float,
     rng: jax.random.PRNGKey,
-    counts: jnp.ndarray,
+    novelty_signal: jnp.ndarray,
 ):
     """Perform multiple epochs of updates with multiple updates."""
     obs, action, log_pi_old, value, target, gae = batch
@@ -470,7 +543,7 @@ def update(
             clip_eps,
             entropy_coeff,
             critic_coeff,
-            counts=counts,
+            novelty_signal=novelty_signal,
             high_low_or_mixed=STR_TO_JAX_ARR["low"],
         )
 
@@ -499,7 +572,7 @@ def update(
             clip_eps,
             entropy_coeff,
             critic_coeff,
-            counts=counts,
+            novelty_signal=novelty_signal,
             high_low_or_mixed=STR_TO_JAX_ARR["high"],
         )
 
@@ -522,6 +595,48 @@ def update(
     return avg_metrics_dict, train_state, rng
 
 
+def update_RND(
+    RND_train_state: TrainState,
+    distiller_train_state: TrainState,
+    batch: Tuple,
+    num_envs: int,
+    n_steps: int,
+    n_minibatch: int,
+    epoch_ppo: int,
+    rng: jax.random.PRNGKey,
+):
+    """Perform multiple epochs of updates with multiple updates."""
+    obs, action, log_pi_old, value, target, gae = batch
+    size_batch = num_envs * n_steps
+    size_minibatch = size_batch // n_minibatch
+    idxes = jnp.arange(num_envs * n_steps)
+    avg_metrics_dict = defaultdict(int)
+    target = RND_train_state.apply_fn(RND_train_state.params, obs)
+
+    for _ in range(epoch_ppo):
+        idxes = jax.random.permutation(rng, idxes)
+        idxes_list = [
+            idxes[start : start + size_minibatch]
+            for start in jnp.arange(0, size_batch, size_minibatch)
+        ]
+
+        RND_train_state, total_loss = update_epoch_RND(
+            RND_train_state,
+            distiller_train_state,
+            idxes_list,
+            flatten_dims(obs),
+            flatten_dims(action),
+            flatten_dims(log_pi_old),
+            flatten_dims(value),
+            jnp.array(flatten_dims(target)),
+        )
+
+    for k, v in avg_metrics_dict.items():
+        avg_metrics_dict[k] = v / (epoch_ppo)
+
+    return avg_metrics_dict, RND_train_state, rng
+
+
 @jax.jit
 def update_epoch(
     train_state: TrainState,
@@ -535,7 +650,7 @@ def update_epoch(
     clip_eps: float,
     entropy_coeff: float,
     critic_coeff: float,
-    counts: jnp.ndarray,
+    novelty_signal: jnp.ndarray,
     high_low_or_mixed: jnp.ndarray,
 ):
     for idx in idxes:
@@ -554,8 +669,28 @@ def update_epoch(
             clip_eps=clip_eps,
             critic_coeff=critic_coeff,
             entropy_coeff=entropy_coeff,
-            counts=counts,
+            novelty_signal=novelty_signal,
             high_low_or_mixed=high_low_or_mixed,
         )
         train_state = train_state.apply_gradients(grads=grads)
     return train_state, total_loss
+
+
+@jax.jit
+def update_epoch_RND(
+    RND_train_state: TrainState,
+    distiller_train_state: TrainState,
+    idxes: jnp.ndarray,
+    obs,
+    target,
+):
+    for idx in idxes:
+        grad_fn = jax.value_and_grad(loss_distiller, has_aux=True)
+        total_loss, grads = grad_fn(
+            distiller_train_state.params,
+            distiller_train_state.apply_fn,
+            obs=obs[idx],
+            target=target[idx],
+        )
+        distiller_train_state = distiller_train_state.apply_gradients(grads=grads)
+    return distiller_train_state, total_loss
