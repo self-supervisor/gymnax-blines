@@ -216,15 +216,17 @@ def compute_novelty(obs, rnd_model, rnd_params, distiller_model, distiller_param
 
 
 def get_optimiser(config):
-    num_steps_warm_up = int(config.num_train_steps * config.lr_warmup)
+    num_steps_warm_up = int(
+        config.train_config.num_train_steps * config.train_config.lr_warmup
+    )
     schedule_fn = optax.linear_schedule(
-        init_value=-float(config.lr_begin),
-        end_value=-float(config.lr_end),
+        init_value=-float(config.train_config.lr_begin),
+        end_value=-float(config.train_config.lr_end),
         transition_steps=num_steps_warm_up,
     )
 
     tx = optax.chain(
-        optax.clip_by_global_norm(config.max_grad_norm),
+        optax.clip_by_global_norm(config.train_config.max_grad_norm),
         optax.scale_by_adam(eps=1e-5),
         optax.scale_by_schedule(schedule_fn),
     )
@@ -245,15 +247,16 @@ def train_ppo(
 ):
     """Training loop for PPO based on https://github.com/bmazoure/ppo_jax."""
     num_total_epochs = int(config.num_train_steps // config.num_train_envs + 1)
-    tx = get_optimiser(config)
     PPO_train_state = TrainState.create(
-        apply_fn=PPO_model.apply, params=PPO_params, tx=tx,
+        apply_fn=PPO_model.apply, params=PPO_params, tx=get_optimiser(config),
     )
     RND_train_state = TrainState.create(
-        apply_fn=RND_model.apply, params=RND_params, tx=tx,
+        apply_fn=RND_model.apply, params=RND_params, tx=get_optimiser(config),
     )
     distiller_train_state = TrainState.create(
-        apply_fn=distiller_model.apply, params=distiller_params, tx=tx,
+        apply_fn=distiller_model.apply,
+        params=distiller_params,
+        tx=get_optimiser(config),
     )
     # Setup the rollout manager -> Collects data in vmapped-fashion over envs
     rollout_manager = RolloutManager(
@@ -443,8 +446,8 @@ def flatten_dims(x):
 
 
 def loss_distiller(
-    params_model: flax.core.frozen_dict.FrozenDict,
-    apply_fn: Callable[..., Any],
+    params_model,  #: flax.core.frozen_dict.FrozenDict,
+    apply_fn,  #: Callable[..., Any],
     obs: jnp.ndarray,
     target: jnp.ndarray,
 ):
@@ -675,19 +678,15 @@ def update_epoch(
 
 @jax.jit
 def update_epoch_RND(
-    RND_train_state: TrainState,
-    distiller_train_state: TrainState,
-    idxes: jnp.ndarray,
-    obs,
-    target,
+    distiller_train_state: TrainState, idxes: jnp.ndarray, obs, targets,
 ):
     for idx in idxes:
-        grad_fn = jax.value_and_grad(loss_distiller, has_aux=True)
+        grad_fn = jax.value_and_grad(loss_distiller)
         total_loss, grads = grad_fn(
             distiller_train_state.params,
             distiller_train_state.apply_fn,
             obs=obs[idx],
-            target=target[idx],
+            target=targets[idx],
         )
         distiller_train_state = distiller_train_state.apply_gradients(grads=grads)
     return distiller_train_state, total_loss

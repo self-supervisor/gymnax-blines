@@ -5,6 +5,7 @@ from flax.training.train_state import TrainState
 
 from utils.helpers import load_config
 from utils.models import CategoricalSeparateMLP, build_RND_models, get_model_ready
+from utils.ppo import log_value_predictions, compute_novelty
 import gymnax
 
 
@@ -58,15 +59,45 @@ def PPO_train_state(config, PPO):
     PPO_model, PPO_params = PPO
     tx = get_optimiser(config)
     PPO_train_state = TrainState.create(
-        apply_fn=PPO_model.apply, params=PPO_params, tc=tx
+        apply_fn=PPO_model.apply, params=PPO_params, tx=tx
     )
     return PPO_train_state
+
+
+@pytest.fixture
+def RND_train_state(config, RND):
+    from utils.ppo import get_optimiser
+
+    RND_model, RND_params, _, _ = RND
+    tx = get_optimiser(config)
+    RND_train_state = TrainState.create(
+        apply_fn=RND_model.apply, params=RND_params, tx=tx
+    )
+    return RND_train_state
+
+
+@pytest.fixture
+def distiller_train_state(config, RND):
+    from utils.ppo import get_optimiser
+
+    _, _, distiller_model, distiller_params = RND
+    tx = get_optimiser(config)
+    distiller_train_state = TrainState.create(
+        apply_fn=distiller_model.apply, params=distiller_params, tx=tx
+    )
+    return distiller_train_state
 
 
 @pytest.fixture
 def observation():
     key = jax.random.PRNGKey(4)
     return jax.random.normal(key, (1, 4))
+
+
+@pytest.fixture
+def observation_batch():
+    key = jax.random.PRNGKey(4)
+    return jax.random.normal(key, (32, 4))
 
 
 @pytest.fixture
@@ -94,7 +125,6 @@ def test_build_RND_models(RND, observation):
 
 
 def test_compute_novelty(RND, observation):
-    from utils.ppo import compute_novelty
 
     RND_model, RND_params, distiller_model, distiller_params = RND
     novelty = compute_novelty(
@@ -103,8 +133,7 @@ def test_compute_novelty(RND, observation):
     assert jnp.allclose(novelty, jnp.zeros_like(novelty)) == False
 
 
-def test_log_value_predictions(RND, PPO, rollout_manager):
-    from utils.ppo import log_value_predictions, compute_novelty
+def test_log_value_predictions(RND, PPO, PPO_train_state, rollout_manager, observation):
 
     PPO_model, PPO_params = PPO
     RND_model, RND_params, distiller_model, distiller_params = RND
@@ -116,16 +145,28 @@ def test_log_value_predictions(RND, PPO, rollout_manager):
         use_wandb=False,
         model=PPO_model,
         train_state=PPO_train_state,
-        rollout_manage=rollout_manager,
+        rollout_manager=rollout_manager,
         rng=rng,
         novelty_signal=novelty_signal,
     )
 
 
-def test_update_epoch(RND):
-    from utils.ppo import update_epoch
+def test_update_epoch_RND(RND, distiller_train_state, observation_batch):
+    from utils.ppo import update_epoch_RND
 
-    pass
+    RND_model, RND_params, distiller_model, distiller_params = RND
+
+    targets = RND_model.apply(RND_params, observation_batch)
+    idxes = jnp.arange(observation_batch.shape[0])
+    preds = distiller_model.apply(distiller_params, observation_batch)
+    initial_loss = jnp.square(preds - targets).mean()
+    distiller_train_state, total_loss = update_epoch_RND(
+        distiller_train_state=distiller_train_state,
+        idxes=idxes,
+        obs=observation_batch,
+        targets=targets,
+    )
+    assert initial_loss > total_loss
 
 
 def test_update_RND(RND):
