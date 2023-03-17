@@ -6,7 +6,9 @@ from evosax import NetworkMapper
 from tensorflow_probability.substrates import jax as tfp
 
 
-def get_model_ready(rng, config, scale, count_switch, high_freq_multiplier, speed=False):
+def get_model_ready(
+    rng, config, scale, count_switch, high_freq_multiplier, speed=False
+):
     """Instantiate a model according to obs shape of environment."""
     # Get number of desired output units
     env, env_params = gymnax.make(config.env_name, **config.env_kwargs)
@@ -125,20 +127,20 @@ class CategoricalSeparateMLP(nn.Module):
 
         x = (x / 13) - 0.5
         if len(x.shape) > 1:
-            low_frequency = jnp.copy(x[:, :2])
+            low_frequency = x[:, :2]
             low_frequency = LFF(
                 num_output_features=self.num_hidden_units,
                 num_input_features=x.shape[-1],
                 name=self.prefix_critic + "_fc_1_low_frequency",
-                scale=self.scale * 0.001,
+                scale=self.scale,
             )(low_frequency)
-            high_frequency = jnp.copy(x[:, :2])
-            high_frequency = LFF(
-                num_output_features=self.num_hidden_units,
-                num_input_features=x.shape[-1],
-                name=self.prefix_critic + "_fc_1_high_frequency",
-                scale=self.scale * 100,
-            )(high_frequency)
+            # high_frequency = jnp.copy(x[:, :2])
+            # high_frequency = LFF(
+            #     num_output_features=self.num_hidden_units,
+            #     num_input_features=x.shape[-1],
+            #     name=self.prefix_critic + "_fc_1_high_frequency",
+            #     scale=self.scale * 100,
+            # )(high_frequency)
 
         else:
             low_frequency = LFF(
@@ -147,21 +149,21 @@ class CategoricalSeparateMLP(nn.Module):
                 name=self.prefix_critic + "_fc_1_low_frequency",
                 scale=self.scale * 0.001,
             )(x[:2])
-            high_frequency = LFF(
-                num_output_features=self.num_hidden_units,
-                num_input_features=x.shape[-1],
-                name=self.prefix_critic + "_fc_1_high_frequency",
-                scale=self.scale * 1000,
-            )(x[:2])
+            # high_frequency = LFF(
+            #     num_output_features=self.num_hidden_units,
+            #     num_input_features=x.shape[-1],
+            #     name=self.prefix_critic + "_fc_1_high_frequency",
+            #     scale=self.scale * 1000,
+            # )(x[:2])
 
         for i in range(1, self.num_hidden_layers):
-            x_v_high_frequency = nn.relu(
-                nn.Dense(
-                    self.num_hidden_units,
-                    name=self.prefix_critic + f"_fc_{i+1}_high_frequency",
-                    bias_init=default_mlp_init(),
-                )(high_frequency)
-            )
+            # x_v_high_frequency = nn.relu(
+            #     nn.Dense(
+            #         self.num_hidden_units,
+            #         name=self.prefix_critic + f"_fc_{i+1}_high_frequency",
+            #         bias_init=default_mlp_init(),
+            #     )(high_frequency)
+            # )
             x_v_low_frequency = nn.relu(
                 nn.Dense(
                     self.num_hidden_units,
@@ -175,43 +177,44 @@ class CategoricalSeparateMLP(nn.Module):
             bias_init=default_mlp_init(),
         )(x_v_low_frequency)
 
-        v_high_frequency = nn.Dense(
-            1,
-            name=self.prefix_critic + "_fc_v_high_frequency",
-            bias_init=default_mlp_init(),
-        )(x_v_high_frequency)
+        # v_high_frequency = nn.Dense(
+        #     1,
+        #     name=self.prefix_critic + "_fc_v_high_frequency",
+        #     bias_init=default_mlp_init(),
+        # )(x_v_high_frequency)
 
         if len(x.shape) == 1:
             v_low = jnp.copy(v_low_frequency)
-            v_high = jnp.copy(v_high_frequency)
-            v_low_frequency = v_low_frequency * (
-                extracted_counts < self.count_switch
-            ).astype(int)
-            v_high_frequency = v_high_frequency * (
-                extracted_counts > self.count_switch
-            ).astype(int)
-            v_mixed = v_high_frequency + v_low_frequency
-            v = (
-                high_low_or_mixed[0] * v_high
-                + high_low_or_mixed[1] * v_low
-                + high_low_or_mixed[2] * v_mixed
-            )
+            # v_high = jnp.copy(v_high_frequency)
+            # v_low_frequency = v_low_frequency * (
+            #     extracted_counts < self.count_switch
+            # ).astype(int)
+            # v_high_frequency = v_high_frequency * (
+            #     extracted_counts > self.count_switch
+            # ).astype(int)
+            # v_mixed = v_high_frequency + v_low_frequency
+            v = v_low  # (
+            #     high_low_or_mixed[0] * v_high
+            #     + high_low_or_mixed[1] * v_low
+            #     + high_low_or_mixed[2] * v_mixed
+            # )
         else:
             v_low = jnp.copy(v_low_frequency)
-            v_high = jnp.copy(v_high_frequency)
+            # v_high = jnp.copy(v_high_frequency)
 
             v_low_frequency = v_low_frequency * jnp.expand_dims(
                 (extracted_counts < self.count_switch).astype(int), 1
             )
-            v_high_frequency = v_high_frequency * jnp.expand_dims(
-                (extracted_counts > self.count_switch).astype(int), 1
-            )
-            v_mixed = v_high_frequency + v_low_frequency
-            v = (
-                high_low_or_mixed[0] * v_high
-                + high_low_or_mixed[1] * v_low
-                + high_low_or_mixed[2] * v_mixed
-            )
+            # v_high_frequency = v_high_frequency * jnp.expand_dims(
+            #     (extracted_counts > self.count_switch).astype(int), 1
+            # )
+            # v_mixed = v_high_frequency + v_low_frequency
+            v = v_low
+            # v = (
+            #     high_low_or_mixed[0] * v_high
+            #     + high_low_or_mixed[1] * v_low
+            #     + high_low_or_mixed[2] * v_mixed
+            # )
 
         if len(x.shape) > 1:
             x = x[:, :2]

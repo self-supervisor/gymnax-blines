@@ -4,7 +4,7 @@ CartPole-v1
 Pendulum-v1
 Acrobot-v1
 MountainCar-v0
-MountainCarContinuous-v0
+# MountainCarContinuous-v0
 "
 
 export minatar_envs="
@@ -32,6 +32,7 @@ PointRobot-misc
 BernoulliBandit-misc
 GaussianBandit-misc
 "
+frequencies=(0.001 0.001 0.01 0.1 1 10)
 
 if [[ "$1" == "speed" ]]
 then
@@ -68,13 +69,16 @@ then
     # TODO: Add V100S results and TPU evaluation
 elif [[ "$1" == "train" ]]
 then
-    # Loop over environments and train agents with PPO/ES
-    for env_name in $gym_envs $minatar_envs $bsuite_envs
+    for frequency in ${frequencies[@]}
     do
-        python train.py -config agents/$env_name/ppo.yaml --lrate 1e-04
-        python train.py -config agents/$env_name/ppo.yaml --lrate 1e-03
-        python train.py -config agents/$env_name/ppo.yaml
-        python train.py -config agents/$env_name/es.yaml
+        # Loop over environments and train agents with PPO/ES
+        for env_name in $gym_envs
+        do
+            python train.py -config agents/$env_name/ppo.yaml --lrate 1e-04 --frequency $frequency
+            python train.py -config agents/$env_name/ppo.yaml --lrate 1e-03 --frequency $frequency
+            python train.py -config agents/$env_name/ppo.yaml --frequency $frequency
+            # python train.py -config agents/$env_name/es.yaml
+        done
     done
 
 elif [[ "$1" == "visualize" ]]
