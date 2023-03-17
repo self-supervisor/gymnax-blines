@@ -21,9 +21,7 @@ def main(
     # Setup the model architecture
     rng, rng_init = jax.random.split(rng)
 
-    model, params = get_model_ready(
-        rng_init, config, scale, count_switch, high_freq_multiplier
-    )
+    model, params = get_model_ready(rng_init, config, scale)
 
     config.scale = scale
     config.count_switch = count_switch
@@ -41,7 +39,7 @@ def main(
 
     # Log and store the results.
     log_steps, log_return, network_ckpt = train_fn(
-        rng, config, model, params, mle_log, use_wandb
+        rng, config, model, params, mle_log  # , use_wandb
     )
 
     if use_wandb:

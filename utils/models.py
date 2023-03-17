@@ -6,9 +6,7 @@ from evosax import NetworkMapper
 from tensorflow_probability.substrates import jax as tfp
 
 
-def get_model_ready(
-    rng, config, scale, count_switch, high_freq_multiplier, speed=False
-):
+def get_model_ready(rng, config, scale, speed=False):
     """Instantiate a model according to obs shape of environment."""
     # Get number of desired output units
     env, env_params = gymnax.make(config.env_name, **config.env_kwargs)
@@ -24,8 +22,8 @@ def get_model_ready(
                 **config.network_config,
                 num_output_units=env.num_actions,
                 scale=scale,
-                high_freq_multiplier=high_freq_multiplier,
-                count_switch=count_switch,
+                # high_freq_multiplier=high_freq_multiplier,
+                # count_switch=count_switch,
             )
         elif config.network_name == "Gaussian-MLP":
             model = GaussianSeparateMLP(
@@ -46,13 +44,13 @@ def get_model_ready(
 
     # Initialize the network based on the observation shape
     obs_shape = env.observation_space(env_params).shape
-    counts_shape = env.get_counts().shape
+    # counts_shape = env.get_counts().shape
     if config.network_name != "LSTM" or speed:
         params = model.init(
             rng,
             jnp.zeros(obs_shape),
-            jnp.zeros(counts_shape),
-            jnp.array([0, 0]),
+            # jnp.zeros(counts_shape),
+            # jnp.array([0, 0]),
             rng=rng,
         )
     else:
@@ -99,7 +97,7 @@ class CategoricalSeparateMLP(nn.Module):
     num_hidden_units: int
     num_hidden_layers: int
     scale: float
-    high_freq_multiplier: float
+    # high_freq_multiplier: float
     prefix_actor: str = "actor"
     prefix_critic: str = "critic"
     model_name: str = "separate-mlp"
@@ -108,7 +106,8 @@ class CategoricalSeparateMLP(nn.Module):
     count_switch: int = int(2e3)
 
     @nn.compact
-    def __call__(self, x, counts, high_low_or_mixed, rng):
+    def __call__(self, x, rng):
+        # def __call__(self, x, counts, high_low_or_mixed, rng):
         if self.flatten_2d and len(x.shape) == 2:
             x = x.reshape(-1)
         if self.flatten_2d and len(x.shape) > 2:
@@ -118,12 +117,12 @@ class CategoricalSeparateMLP(nn.Module):
         if self.flatten_3d and len(x.shape) > 3:
             x = x.reshape(x.shape[0], -1)
 
-        if len(x.shape) > 1:
-            positions = x[:, :2].astype(int)
-            extracted_counts = counts[positions[:, 0], positions[:, 1]]
-        else:
-            positions = x[:2].astype(int)
-            extracted_counts = counts[positions[0], positions[1]]
+        # if len(x.shape) > 1:
+        #     positions = x[:, :2].astype(int)
+        #     extracted_counts = counts[positions[:, 0], positions[:, 1]]
+        # else:
+        #     positions = x[:2].astype(int)
+        #     extracted_counts = counts[positions[0], positions[1]]
 
         x = (x / 13) - 0.5
         if len(x.shape) > 1:
@@ -147,7 +146,7 @@ class CategoricalSeparateMLP(nn.Module):
                 num_output_features=self.num_hidden_units,
                 num_input_features=x.shape[-1],
                 name=self.prefix_critic + "_fc_1_low_frequency",
-                scale=self.scale * 0.001,
+                scale=self.scale,
             )(x[:2])
             # high_frequency = LFF(
             #     num_output_features=self.num_hidden_units,
@@ -202,9 +201,9 @@ class CategoricalSeparateMLP(nn.Module):
             v_low = jnp.copy(v_low_frequency)
             # v_high = jnp.copy(v_high_frequency)
 
-            v_low_frequency = v_low_frequency * jnp.expand_dims(
-                (extracted_counts < self.count_switch).astype(int), 1
-            )
+            # v_low_frequency = v_low_frequency * jnp.expand_dims(
+            #     (extracted_counts < self.count_switch).astype(int), 1
+            # )
             # v_high_frequency = v_high_frequency * jnp.expand_dims(
             #     (extracted_counts > self.count_switch).astype(int), 1
             # )
