@@ -1,13 +1,8 @@
 import jax
 import jax.numpy as jnp
-from evosax import (
-    ProblemMapper,
-    Strategies,
-    ESLog,
-    FitnessShaper,
-    ParameterReshaper,
-)
 import tqdm
+from evosax import (ESLog, FitnessShaper, ParameterReshaper, ProblemMapper,
+                    Strategies)
 
 
 def train_es(rng, config, model, params, mle_log):
@@ -36,9 +31,7 @@ def train_es(rng, config, model, params, mle_log):
 
     # Augment the evaluation wrappers for batch (pop/mc) evaluation
     if config.network_name != "LSTM":
-        train_evaluator.set_apply_fn(
-            train_param_reshaper.vmap_dict, model.apply
-        )
+        train_evaluator.set_apply_fn(train_param_reshaper.vmap_dict, model.apply)
         test_evaluator.set_apply_fn(test_param_reshaper.vmap_dict, model.apply)
     else:
         train_evaluator.set_apply_fn(
@@ -81,9 +74,7 @@ def train_es(rng, config, model, params, mle_log):
         reshaped_params = train_param_reshaper.reshape(x)
 
         # Rollout population performance, reshape fitness & update strategy.
-        fitness = train_evaluator.rollout(rng_eval, reshaped_params).mean(
-            axis=1
-        )
+        fitness = train_evaluator.rollout(rng_eval, reshaped_params).mean(axis=1)
 
         # Separate loss/acc when evolving classifier
         fit_re = fit_shaper.apply(x, fitness)
@@ -99,9 +90,7 @@ def train_es(rng, config, model, params, mle_log):
             mean_params = es_state.mean
             x_test = jnp.stack([best_params, mean_params], axis=0)
             reshaped_test_params = test_param_reshaper.reshape(x_test)
-            test_fitness = test_evaluator.rollout(
-                rng_test, reshaped_test_params
-            )
+            test_fitness = test_evaluator.rollout(rng_test, reshaped_test_params)
 
             test_fitness_to_log = test_fitness.mean(axis=1)[1]
             log_steps.append(train_evaluator.total_env_steps)

@@ -77,11 +77,6 @@ then
         python train.py -config agents/$env_name/es.yaml
     done
 
-    for env_name in $misc_envs
-    do
-        python train.py -config configs/$env_name/es.yaml
-    done
-
 elif [[ "$1" == "visualize" ]]
 then
     # Loop over environments and visualize trained PPO agent

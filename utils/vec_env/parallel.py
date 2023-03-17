@@ -1,6 +1,8 @@
+from multiprocessing import Pipe, Process
+
 import numpy as np
-from multiprocessing import Process, Pipe
-from utils.vec_env.vectorize import VecEnv, CloudpickleWrapper
+
+from utils.vec_env.vectorize import CloudpickleWrapper, VecEnv
 
 # Imported from https://github.com/openai/baselines/tree/master/baselines/common/vec_envs
 
@@ -44,7 +46,9 @@ class SubprocVecEnv(VecEnv):
             )
         ]
         for p in self.ps:
-            p.daemon = True  # if the main process crashes, we should not cause things to hang
+            p.daemon = (
+                True  # if the main process crashes, we should not cause things to hang
+            )
             p.start()
         for remote in self.work_remotes:
             remote.close()
@@ -86,9 +90,7 @@ class DummyVecEnv(VecEnv):
     def __init__(self, env_fns):
         self.envs = [fn() for fn in env_fns]
         env = self.envs[0]
-        VecEnv.__init__(
-            self, len(env_fns), env.observation_space, env.action_space
-        )
+        VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space)
         self.ts = np.zeros(len(self.envs), dtype="int")
         self.actions = None
 

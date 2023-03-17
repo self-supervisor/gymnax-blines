@@ -1,11 +1,11 @@
 train_config:
   train_type: "PPO"
-  num_train_steps: 200000
-  evaluate_every_epochs: 500
+  num_train_steps: 120000
+  evaluate_every_epochs: 1000
 
   env_name: "FourRooms-misc"
   env_kwargs:
-    use_visual_obs: true
+    use_visual_obs: false
   env_params:
     resample_init_pos: true
     resample_goal_pos: false
@@ -27,8 +27,8 @@ train_config:
 
   network_name: "Categorical-MLP"
   network_config:
-    num_hidden_units: 64
-    num_hidden_layers: 2
+    num_hidden_units: 8
+    num_hidden_layers: 2 
     flatten_3d: True
 
 log_config:

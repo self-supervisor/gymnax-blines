@@ -1,9 +1,10 @@
-import numpy as np
-import jax
 import gymnax
+import jax
+import numpy as np
 from gymnax.visualize import Visualizer
+
+from utils.helpers import load_config, load_pkl_object
 from utils.models import get_model_ready
-from utils.helpers import load_pkl_object, load_config
 
 
 def load_neural_network(config, agent_path):
@@ -87,9 +88,7 @@ if __name__ == "__main__":
     base = f"agents/{args.env_name}/{args.train_type}"
     configs = load_config(base + ".yaml")
     if not args.random:
-        model, model_params = load_neural_network(
-            configs.train_config, base + ".pkl"
-        )
+        model, model_params = load_neural_network(configs.train_config, base + ".pkl")
     else:
         model, model_params = None, None
     env, env_params = gymnax.make(
@@ -97,8 +96,6 @@ if __name__ == "__main__":
         **configs.train_config.env_kwargs,
     )
     env_params.replace(**configs.train_config.env_params)
-    state_seq, cum_rewards = rollout_episode(
-        env, env_params, model, model_params
-    )
+    state_seq, cum_rewards = rollout_episode(env, env_params, model, model_params)
     vis = Visualizer(env, env_params, state_seq, cum_rewards)
     vis.animate(f"docs/{args.env_name}.gif")
