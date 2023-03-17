@@ -598,7 +598,7 @@ def update(
 def update_RND(
     RND_train_state: TrainState,
     distiller_train_state: TrainState,
-    batch: Tuple,
+    observation_batch: jnp.ndarray,
     num_envs: int,
     n_steps: int,
     n_minibatch: int,
@@ -606,12 +606,10 @@ def update_RND(
     rng: jax.random.PRNGKey,
 ):
     """Perform multiple epochs of updates with multiple updates."""
-    obs, action, log_pi_old, value, target, gae = batch
     size_batch = num_envs * n_steps
     size_minibatch = size_batch // n_minibatch
     idxes = jnp.arange(num_envs * n_steps)
-    avg_metrics_dict = defaultdict(int)
-    target = RND_train_state.apply_fn(RND_train_state.params, obs)
+    target = RND_train_state.apply_fn(RND_train_state.params, observation_batch)
 
     for _ in range(epoch_ppo):
         idxes = jax.random.permutation(rng, idxes)
@@ -621,20 +619,13 @@ def update_RND(
         ]
 
         RND_train_state, total_loss = update_epoch_RND(
-            RND_train_state,
             distiller_train_state,
             idxes_list,
-            flatten_dims(obs),
-            flatten_dims(action),
-            flatten_dims(log_pi_old),
-            flatten_dims(value),
+            flatten_dims(observation_batch),
             jnp.array(flatten_dims(target)),
         )
 
-    for k, v in avg_metrics_dict.items():
-        avg_metrics_dict[k] = v / (epoch_ppo)
-
-    return avg_metrics_dict, RND_train_state, rng
+    return RND_train_state, rng
 
 
 @jax.jit

@@ -97,7 +97,7 @@ def observation():
 @pytest.fixture
 def observation_batch():
     key = jax.random.PRNGKey(4)
-    return jax.random.normal(key, (32, 4))
+    return jax.random.normal(key, (32, 1, 4))
 
 
 @pytest.fixture
@@ -151,6 +151,27 @@ def test_log_value_predictions(RND, PPO, PPO_train_state, rollout_manager, obser
     )
 
 
+def test_update_RND(RND_train_state, distiller_train_state, observation_batch):
+    from utils.ppo import update_RND
+
+    num_envs = 32
+    n_steps = 32
+    n_minibatch = 32
+    epoch_ppo = 2
+    rng = jax.random.PRNGKey(0)
+
+    _, _ = update_RND(
+        RND_train_state,
+        distiller_train_state,
+        observation_batch,
+        num_envs,
+        n_steps,
+        n_minibatch,
+        epoch_ppo,
+        rng,
+    )
+
+
 def test_update_epoch_RND(RND, distiller_train_state, observation_batch):
     from utils.ppo import update_epoch_RND
 
@@ -167,9 +188,3 @@ def test_update_epoch_RND(RND, distiller_train_state, observation_batch):
         targets=targets,
     )
     assert initial_loss > total_loss
-
-
-def test_update_RND(RND):
-    from utils.ppo import update_RND
-
-    pass
