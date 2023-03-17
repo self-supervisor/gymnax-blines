@@ -130,14 +130,14 @@ class CategoricalSeparateMLP(nn.Module):
                 num_output_features=self.num_hidden_units,
                 num_input_features=x.shape[-1],
                 name=self.prefix_critic + "_fc_1_low_frequency",
-                scale=self.scale,
+                scale=self.scale * 0.001,
             )(low_frequency)
             high_frequency = jnp.copy(x[:, :2])
             high_frequency = LFF(
                 num_output_features=self.num_hidden_units,
                 num_input_features=x.shape[-1],
                 name=self.prefix_critic + "_fc_1_high_frequency",
-                scale=self.scale * self.high_freq_multiplier,
+                scale=self.scale * 100,
             )(high_frequency)
 
         else:
@@ -145,30 +145,30 @@ class CategoricalSeparateMLP(nn.Module):
                 num_output_features=self.num_hidden_units,
                 num_input_features=x.shape[-1],
                 name=self.prefix_critic + "_fc_1_low_frequency",
-                scale=self.scale,
+                scale=self.scale * 0.001,
             )(x[:2])
             high_frequency = LFF(
                 num_output_features=self.num_hidden_units,
                 num_input_features=x.shape[-1],
                 name=self.prefix_critic + "_fc_1_high_frequency",
-                scale=self.scale * self.high_freq_multiplier,
+                scale=self.scale * 1000,
             )(x[:2])
 
-        #for i in range(1, self.num_hidden_layers):
-        x_v_high_frequency = nn.relu(
-            nn.Dense(
-                self.num_hidden_units,
-                name=self.prefix_critic + f"_fc_blah_high_frequency",
-                bias_init=default_mlp_init(),
-            )(high_frequency)
-        )
-        x_v_low_frequency = nn.relu(
-            nn.Dense(
-                self.num_hidden_units,
-                name=self.prefix_critic + f"_fc_blah_low_frequency",
-                bias_init=default_mlp_init(),
-            )(low_frequency)
-        )
+        for i in range(1, self.num_hidden_layers):
+            x_v_high_frequency = nn.relu(
+                nn.Dense(
+                    self.num_hidden_units,
+                    name=self.prefix_critic + f"_fc_{i+1}_high_frequency",
+                    bias_init=default_mlp_init(),
+                )(high_frequency)
+            )
+            x_v_low_frequency = nn.relu(
+                nn.Dense(
+                    self.num_hidden_units,
+                    name=self.prefix_critic + f"_fc_{i+1}_low_frequency",
+                    bias_init=default_mlp_init(),
+                )(low_frequency)
+            )
         v_low_frequency = nn.Dense(
             1,
             name=self.prefix_critic + "_fc_v_low_frequency",

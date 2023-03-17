@@ -1,0 +1,994 @@
+diff --git a/agents/FourRooms-misc/ppo.yaml b/agents/FourRooms-misc/ppo.yaml
+index 46d6827..661025e 100644
+--- a/agents/FourRooms-misc/ppo.yaml
++++ b/agents/FourRooms-misc/ppo.yaml
+@@ -1,11 +1,11 @@
+ train_config:
+   train_type: "PPO"
+-  num_train_steps: 200000
++  num_train_steps: 5000000
+   evaluate_every_epochs: 500
+ 
+   env_name: "FourRooms-misc"
+   env_kwargs:
+-    use_visual_obs: true
++    use_visual_obs: false
+   env_params:
+     resample_init_pos: true
+     resample_goal_pos: false
+@@ -41,4 +41,4 @@ log_config:
+ 
+ device_config:
+   num_devices: 1
+-  device_type: "gpu"
+\ No newline at end of file
++  device_type: "gpu"
+diff --git a/agents/Freeway-MinAtar/ppo.yaml b/agents/Freeway-MinAtar/ppo.yaml
+index 8f74da2..be08c27 100644
+--- a/agents/Freeway-MinAtar/ppo.yaml
++++ b/agents/Freeway-MinAtar/ppo.yaml
+@@ -38,4 +38,4 @@ log_config:
+ 
+ device_config:
+   num_devices: 1
+-  device_type: "gpu"
+\ No newline at end of file
++  device_type: "gpu"
+diff --git a/speed.py b/speed.py
+index e0c2acc..2eb94cd 100644
+--- a/speed.py
++++ b/speed.py
+@@ -8,14 +8,11 @@ def speed(
+ ):
+     import jax
+     import numpy as np
+-    from utils.models import get_model_ready
++
++    from utils.benchmark import (speed_gymnax_network, speed_gymnax_random,
++                                 speed_numpy_network, speed_numpy_random)
+     from utils.helpers import load_config
+-    from utils.benchmark import (
+-        speed_numpy_random,
+-        speed_numpy_network,
+-        speed_gymnax_random,
+-        speed_gymnax_network,
+-    )
++    from utils.models import get_model_ready
+ 
+     # Get the policy and parameters (if not random)
+     configs = load_config(f"agents/{env_name}/es.yaml")
+diff --git a/train.py b/train.py
+index 228ba0b..8cc441f 100644
+--- a/train.py
++++ b/train.py
+@@ -1,14 +1,23 @@
+ import jax
+-from utils.models import get_model_ready
++
+ from utils.helpers import load_config, save_pkl_object
++from utils.models import get_model_ready
++import wandb
++import numpy as np
++from distutils.util import strtobool
+ 
+ 
+-def main(config, mle_log, log_ext=""):
++def main(config, mle_log, scale, log_ext="", use_wandb: bool = False):
+     """Run training with ES or PPO. Store logs and agent ckpt."""
+     rng = jax.random.PRNGKey(config.seed_id)
+     # Setup the model architecture
+     rng, rng_init = jax.random.split(rng)
+-    model, params = get_model_ready(rng_init, config)
++
++    model, params = get_model_ready(rng_init, config, scale)
++
++    config.scale = scale
++    if use_wandb:
++        wandb.init(config=config, project="gymnax")
+ 
+     # Run the training loop (either evosax ES or PPO)
+     if config.train_type == "ES":
+@@ -20,9 +29,13 @@ def main(config, mle_log, log_ext=""):
+ 
+     # Log and store the results.
+     log_steps, log_return, network_ckpt = train_fn(
+-        rng, config, model, params, mle_log
++        rng, config, model, params, mle_log, use_wandb
+     )
+ 
++    if use_wandb:
++        log_return = [np.array(i) for i in log_return]
++        for i in range(len(log_return)):
++            wandb.log({"steps": log_steps[i], "return": log_return[i]})
+     data_to_store = {
+         "log_steps": log_steps,
+         "log_return": log_return,
+@@ -48,26 +61,30 @@ if __name__ == "__main__":
+     import argparse
+ 
+     parser = argparse.ArgumentParser()
++
+     parser.add_argument(
+         "-config",
+         "--config_fname",
+         type=str,
+-        default="configs/CartPole-v1/ppo.yaml",
++        default="agents/FourRooms-misc/ppo.yaml",
+         help="Path to configuration yaml.",
+     )
+     parser.add_argument(
+-        "-seed",
+-        "--seed_id",
+-        type=int,
+-        default=0,
+-        help="Random seed of experiment.",
++        "-seed", "--seed_id", type=int, default=0, help="Random seed of experiment.",
++    )
++    parser.add_argument(
++        "-lr", "--lrate", type=float, default=5e-04, help="Random seed of experiment.",
++    )
++    parser.add_argument(
++        "--scale", type=float, default=10, help="Random seed of experiment.",
+     )
+     parser.add_argument(
+-        "-lr",
+-        "--lrate",
+-        type=float,
+-        default=5e-04,
+-        help="Random seed of experiment.",
++        "--wandb",
++        type=lambda x: bool(strtobool(x)),
++        default=True,
++        nargs="?",
++        const=True,
++        help="whether to log with wandb",
+     )
+     args, _ = parser.parse_known_args()
+     config = load_config(args.config_fname, args.seed_id, args.lrate)
+@@ -75,4 +92,6 @@ if __name__ == "__main__":
+         config.train_config,
+         mle_log=None,
+         log_ext=str(args.lrate) if args.lrate != 5e-04 else "",
++        scale=args.scale,
++        use_wandb=args.wandb,
+     )
+diff --git a/utils/benchmark.py b/utils/benchmark.py
+index 70694a5..fa61696 100644
+--- a/utils/benchmark.py
++++ b/utils/benchmark.py
+@@ -1,7 +1,9 @@
+-import jax
+ import time
++
++import jax
+ import numpy as np
+ from gymnax.experimental import RolloutWrapper
++
+ from utils.vec_env.wrapper import make_parallel_env
+ 
+ 
+@@ -21,15 +23,11 @@ def speed_gymnax_random(env_name, num_env_steps, num_envs, rng, env_kwargs):
+     rng_batch_eval = jax.random.split(rng_batch, num_envs).squeeze()
+     if num_envs == 1:
+         rollout_fn = manager.single_rollout
+-        obs, action, reward, next_obs, done, cum_ret = rollout_fn(
+-            rng_batch_eval, None
+-        )
++        obs, action, reward, next_obs, done, cum_ret = rollout_fn(rng_batch_eval, None)
+         steps_per_batch = obs.shape[0]
+     else:
+         rollout_fn = manager.batch_rollout
+-        obs, action, reward, next_obs, done, cum_ret = rollout_fn(
+-            rng_batch_eval, None
+-        )
++        obs, action, reward, next_obs, done, cum_ret = rollout_fn(rng_batch_eval, None)
+         steps_per_batch = obs.shape[0] * obs.shape[1]
+     step_counter = 0
+ 
+@@ -99,9 +97,7 @@ def speed_numpy_random(env_name, num_env_steps, num_envs):
+     return time.time() - start_t
+ 
+ 
+-def speed_numpy_network(
+-    env_name, num_env_steps, num_envs, rng, model, model_params
+-):
++def speed_numpy_network(env_name, num_env_steps, num_envs, rng, model, model_params):
+     """MLP episode rollout in numpy."""
+     envs = make_parallel_env(env_name, seed=0, n_rollout_threads=num_envs)
+     obs = envs.reset()
+@@ -116,9 +112,7 @@ def speed_numpy_network(
+     rng, rng_batch = jax.random.split(rng)
+     rng_batch_eval = jax.random.split(rng_batch, num_envs).squeeze()
+     if env_name in ["Pendulum-v1", "MountainCarContinuous-v0"]:
+-        action = apply_fn(model_params, obs, rng_batch_eval).reshape(
+-            num_envs, 1
+-        )
++        action = apply_fn(model_params, obs, rng_batch_eval).reshape(num_envs, 1)
+     else:
+         action = apply_fn(model_params, obs, rng_batch_eval).reshape(num_envs)
+ 
+@@ -128,13 +122,9 @@ def speed_numpy_network(
+         rng_batch_eval = jax.random.split(rng_batch, num_envs).squeeze()
+ 
+         if env_name in ["Pendulum-v1", "MountainCarContinuous-v0"]:
+-            action = apply_fn(model_params, obs, rng_batch_eval).reshape(
+-                num_envs, 1
+-            )
++            action = apply_fn(model_params, obs, rng_batch_eval).reshape(num_envs, 1)
+         else:
+-            action = apply_fn(model_params, obs, rng_batch_eval).reshape(
+-                num_envs
+-            )
++            action = apply_fn(model_params, obs, rng_batch_eval).reshape(num_envs)
+         obs, reward, done, _ = envs.step(action.tolist())
+         # NOTE: Automatic reset taken care of by wrapper!
+     return time.time() - start_t
+diff --git a/utils/es.py b/utils/es.py
+index c19519d..9b5e02f 100644
+--- a/utils/es.py
++++ b/utils/es.py
+@@ -1,13 +1,8 @@
+ import jax
+ import jax.numpy as jnp
+-from evosax import (
+-    ProblemMapper,
+-    Strategies,
+-    ESLog,
+-    FitnessShaper,
+-    ParameterReshaper,
+-)
+ import tqdm
++from evosax import (ESLog, FitnessShaper, ParameterReshaper, ProblemMapper,
++                    Strategies)
+ 
+ 
+ def train_es(rng, config, model, params, mle_log):
+@@ -36,9 +31,7 @@ def train_es(rng, config, model, params, mle_log):
+ 
+     # Augment the evaluation wrappers for batch (pop/mc) evaluation
+     if config.network_name != "LSTM":
+-        train_evaluator.set_apply_fn(
+-            train_param_reshaper.vmap_dict, model.apply
+-        )
++        train_evaluator.set_apply_fn(train_param_reshaper.vmap_dict, model.apply)
+         test_evaluator.set_apply_fn(test_param_reshaper.vmap_dict, model.apply)
+     else:
+         train_evaluator.set_apply_fn(
+@@ -81,9 +74,7 @@ def train_es(rng, config, model, params, mle_log):
+         reshaped_params = train_param_reshaper.reshape(x)
+ 
+         # Rollout population performance, reshape fitness & update strategy.
+-        fitness = train_evaluator.rollout(rng_eval, reshaped_params).mean(
+-            axis=1
+-        )
++        fitness = train_evaluator.rollout(rng_eval, reshaped_params).mean(axis=1)
+ 
+         # Separate loss/acc when evolving classifier
+         fit_re = fit_shaper.apply(x, fitness)
+@@ -99,9 +90,7 @@ def train_es(rng, config, model, params, mle_log):
+             mean_params = es_state.mean
+             x_test = jnp.stack([best_params, mean_params], axis=0)
+             reshaped_test_params = test_param_reshaper.reshape(x_test)
+-            test_fitness = test_evaluator.rollout(
+-                rng_test, reshaped_test_params
+-            )
++            test_fitness = test_evaluator.rollout(rng_test, reshaped_test_params)
+ 
+             test_fitness_to_log = test_fitness.mean(axis=1)[1]
+             log_steps.append(train_evaluator.total_env_steps)
+diff --git a/utils/helpers.py b/utils/helpers.py
+index d73db60..3dceea6 100644
+--- a/utils/helpers.py
++++ b/utils/helpers.py
+@@ -1,7 +1,8 @@
+ def load_config(config_fname, seed_id=0, lrate=None):
+     """Load training configuration and random seed of experiment."""
+-    import yaml
+     import re
++
++    import yaml
+     from dotmap import DotMap
+ 
+     def load_yaml(config_fname: str) -> dict:
+diff --git a/utils/models.py b/utils/models.py
+index 5deb2d3..8fda1b9 100644
+--- a/utils/models.py
++++ b/utils/models.py
+@@ -1,12 +1,12 @@
++import flax.linen as nn
++import gymnax
+ import jax
+ import jax.numpy as jnp
+-import flax.linen as nn
+-from tensorflow_probability.substrates import jax as tfp
+ from evosax import NetworkMapper
+-import gymnax
++from tensorflow_probability.substrates import jax as tfp
+ 
+ 
+-def get_model_ready(rng, config, speed=False):
++def get_model_ready(rng, config, scale, speed=False):
+     """Instantiate a model according to obs shape of environment."""
+     # Get number of desired output units
+     env, env_params = gymnax.make(config.env_name, **config.env_kwargs)
+@@ -19,7 +19,7 @@ def get_model_ready(rng, config, speed=False):
+     elif config.train_type == "PPO":
+         if config.network_name == "Categorical-MLP":
+             model = CategoricalSeparateMLP(
+-                **config.network_config, num_output_units=env.num_actions
++                **config.network_config, num_output_units=env.num_actions, scale=scale
+             )
+         elif config.network_name == "Gaussian-MLP":
+             model = GaussianSeparateMLP(
+@@ -49,8 +49,34 @@ def get_model_ready(rng, config, speed=False):
+     return model, params
+ 
+ 
+-def default_mlp_init(scale=0.05):
+-    return nn.initializers.uniform(scale)
++def default_mlp_init():
++    return nn.initializers.uniform(scale=0.05)
++
++
++def lff_weight_init(scale: float, num_inputs: int):
++    return nn.initializers.normal(stddev=scale / num_inputs)
++
++
++def lff_bias_init():
++    return nn.initializers.uniform(scale=2)
++
++
++class LFF(nn.Module):
++    num_output_features: int
++    num_input_features: int
++    scale: float
++
++    def setup(self):
++        self.dense = nn.Dense(
++            features=self.num_output_features,
++            kernel_init=lff_weight_init(
++                scale=self.scale, num_inputs=self.num_input_features
++            ),
++            bias_init=lff_bias_init(),
++        )
++
++    def __call__(self, x):
++        return jnp.pi * jnp.sin(self.dense(x) - 1)
+ 
+ 
+ class CategoricalSeparateMLP(nn.Module):
+@@ -59,6 +85,7 @@ class CategoricalSeparateMLP(nn.Module):
+     num_output_units: int
+     num_hidden_units: int
+     num_hidden_layers: int
++    scale: float
+     prefix_actor: str = "actor"
+     prefix_critic: str = "critic"
+     model_name: str = "separate-mlp"
+@@ -80,15 +107,31 @@ class CategoricalSeparateMLP(nn.Module):
+         # Flatten a batch of 3d images into a batch of flat vectors
+         if self.flatten_3d and len(x.shape) > 3:
+             x = x.reshape(x.shape[0], -1)
+-        x_v = nn.relu(
+-            nn.Dense(
+-                self.num_hidden_units,
+-                name=self.prefix_critic + "_fc_1",
+-                bias_init=default_mlp_init(),
+-            )(x)
+-        )
++        # x_v = nn.relu(
++        #     nn.Dense(
++        #         self.num_hidden_units,
++        #         name=self.prefix_critic + "_fc_1",
++        #         bias_init=default_mlp_init(),
++        #     )(x)
++        # )
++        if len(x.shape) == 1:
++            x = x[:2]
++        else:
++            x = x[:, :2]
++        x_v = LFF(
++            num_output_features=self.num_hidden_units,
++            num_input_features=x.shape[-1],
++            name=self.prefix_critic + "_fc_1",
++            scale=self.scale,
++        )(x)
+         # Loop over rest of intermediate hidden layers
+         for i in range(1, self.num_hidden_layers):
++            # x_v = LFF(
++            #     num_output_features=self.num_hidden_units,
++            #     num_input_features=x_v.shape[-1],
++            #     name=self.prefix_critic + f"_fc_{i+1}",
++            #     scale=self.scale,
++            # )(x_v)
+             x_v = nn.relu(
+                 nn.Dense(
+                     self.num_hidden_units,
+@@ -97,29 +140,16 @@ class CategoricalSeparateMLP(nn.Module):
+                 )(x_v)
+             )
+         v = nn.Dense(
+-            1,
+-            name=self.prefix_critic + "_fc_v",
+-            bias_init=default_mlp_init(),
++            1, name=self.prefix_critic + "_fc_v", bias_init=default_mlp_init(),
+         )(x_v)
+ 
+-        x_a = nn.relu(
+-            nn.Dense(
+-                self.num_hidden_units,
+-                bias_init=default_mlp_init(),
+-            )(x)
+-        )
++        x_a = nn.relu(nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x))
+         # Loop over rest of intermediate hidden layers
+         for i in range(1, self.num_hidden_layers):
+             x_a = nn.relu(
+-                nn.Dense(
+-                    self.num_hidden_units,
+-                    bias_init=default_mlp_init(),
+-                )(x_a)
++                nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x_a)
+             )
+-        logits = nn.Dense(
+-            self.num_output_units,
+-            bias_init=default_mlp_init(),
+-        )(x_a)
++        logits = nn.Dense(self.num_output_units, bias_init=default_mlp_init(),)(x_a)
+         # pi = distrax.Categorical(logits=logits)
+         pi = tfp.distributions.Categorical(logits=logits)
+         return v, pi
+@@ -155,9 +185,7 @@ class GaussianSeparateMLP(nn.Module):
+                 )(x_v)
+             )
+         v = nn.Dense(
+-            1,
+-            name=self.prefix_critic + "_fc_v",
+-            bias_init=default_mlp_init(),
++            1, name=self.prefix_critic + "_fc_v", bias_init=default_mlp_init(),
+         )(x_v)
+ 
+         x_a = nn.relu(
+diff --git a/utils/ppo.py b/utils/ppo.py
+index 5cb06ee..0e87a10 100644
+--- a/utils/ppo.py
++++ b/utils/ppo.py
+@@ -1,14 +1,16 @@
++from collections import defaultdict
+ from functools import partial
+-import optax
+-import jax
+-import jax.numpy as jnp
+ from typing import Any, Callable, Tuple
+-from collections import defaultdict
++
+ import flax
+-from flax.training.train_state import TrainState
++import gymnax
++import jax
++import jax.numpy as jnp
+ import numpy as np
++import optax
+ import tqdm
+-import gymnax
++from flax.training.train_state import TrainState
++import wandb
+ 
+ 
+ class BatchManager:
+@@ -40,43 +42,32 @@ class BatchManager:
+     def reset(self):
+         return {
+             "states": jnp.empty(
+-                (self.n_steps, self.num_envs, *self.state_shape),
+-                dtype=jnp.float32,
+-            ),
+-            "actions": jnp.empty(
+-                (self.n_steps, self.num_envs, *self.action_size),
+-            ),
+-            "rewards": jnp.empty(
+-                (self.n_steps, self.num_envs), dtype=jnp.float32
++                (self.n_steps, self.num_envs, *self.state_shape), dtype=jnp.float32,
+             ),
++            "actions": jnp.empty((self.n_steps, self.num_envs, *self.action_size),),
++            "rewards": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
+             "dones": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.uint8),
+-            "log_pis_old": jnp.empty(
+-                (self.n_steps, self.num_envs), dtype=jnp.float32
+-            ),
+-            "values_old": jnp.empty(
+-                (self.n_steps, self.num_envs), dtype=jnp.float32
+-            ),
++            "log_pis_old": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
++            "values_old": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
+             "_p": 0,
+         }
+ 
+     @partial(jax.jit, static_argnums=0)
+     def append(self, buffer, state, action, reward, done, log_pi, value):
+         return {
+-                "states":  buffer["states"].at[buffer["_p"]].set(state),
+-                "actions": buffer["actions"].at[buffer["_p"]].set(action),
+-                "rewards": buffer["rewards"].at[buffer["_p"]].set(reward.squeeze()),
+-                "dones": buffer["dones"].at[buffer["_p"]].set(done.squeeze()),
+-                "log_pis_old": buffer["log_pis_old"].at[buffer["_p"]].set(log_pi),
+-                "values_old": buffer["values_old"].at[buffer["_p"]].set(value),
+-                "_p": (buffer["_p"] + 1) % self.n_steps,
+-            }
++            "states": buffer["states"].at[buffer["_p"]].set(state),
++            "actions": buffer["actions"].at[buffer["_p"]].set(action),
++            "rewards": buffer["rewards"].at[buffer["_p"]].set(reward.squeeze()),
++            "dones": buffer["dones"].at[buffer["_p"]].set(done.squeeze()),
++            "log_pis_old": buffer["log_pis_old"].at[buffer["_p"]].set(log_pi),
++            "values_old": buffer["values_old"].at[buffer["_p"]].set(value),
++            "_p": (buffer["_p"] + 1) % self.n_steps,
++        }
+ 
+     @partial(jax.jit, static_argnums=0)
+     def get(self, buffer):
+         gae, target = self.calculate_gae(
+-            value=buffer["values_old"],
+-            reward=buffer["rewards"],
+-            done=buffer["dones"],
++            value=buffer["values_old"], reward=buffer["rewards"], done=buffer["dones"],
+         )
+         batch = (
+             buffer["states"][:-1],
+@@ -117,10 +108,7 @@ class RolloutManager(object):
+ 
+     @partial(jax.jit, static_argnums=0)
+     def select_action_ppo(
+-        self,
+-        train_state: TrainState,
+-        obs: jnp.ndarray,
+-        rng: jax.random.PRNGKey,
++        self, train_state: TrainState, obs: jnp.ndarray, rng: jax.random.PRNGKey,
+     ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jax.random.PRNGKey]:
+         value, pi = policy(train_state.apply_fn, train_state.params, obs, rng)
+         action = pi.sample(seed=rng)
+@@ -129,9 +117,7 @@ class RolloutManager(object):
+ 
+     @partial(jax.jit, static_argnums=0)
+     def batch_reset(self, keys):
+-        return jax.vmap(self.env.reset, in_axes=(0, None))(
+-            keys, self.env_params
+-        )
++        return jax.vmap(self.env.reset, in_axes=(0, None))(keys, self.env_params)
+ 
+     @partial(jax.jit, static_argnums=0)
+     def batch_step(self, keys, state, action):
+@@ -152,20 +138,14 @@ class RolloutManager(object):
+             rng, rng_step, rng_net = jax.random.split(rng, 3)
+             action, _, _, rng = self.select_action(train_state, obs, rng_net)
+             next_o, next_s, reward, done, _ = self.batch_step(
+-                jax.random.split(rng_step, num_envs),
+-                state,
+-                action.squeeze(),
++                jax.random.split(rng_step, num_envs), state, action.squeeze(),
+             )
+             new_cum_reward = cum_reward + reward * valid_mask
+             new_valid_mask = valid_mask * (1 - done)
+-            carry, y = [
+-                next_o,
+-                next_s,
+-                train_state,
+-                rng,
+-                new_cum_reward,
+-                new_valid_mask,
+-            ], [new_valid_mask]
++            carry, y = (
++                [next_o, next_s, train_state, rng, new_cum_reward, new_valid_mask,],
++                [new_valid_mask],
++            )
+             return carry, y
+ 
+         # Scan over episode step loop
+@@ -198,8 +178,16 @@ def policy(
+     return value, pi
+ 
+ 
+-def train_ppo(rng, config, model, params, mle_log):
++def update_counts(counts, obs):
++    obs = np.array(obs)
++    for i in range(obs.shape[0]):
++        counts[obs[i][0], obs[i][1]] += 1
++    return counts
++
++
++def train_ppo(rng, config, model, params, mle_log, use_wandb):
+     """Training loop for PPO based on https://github.com/bmazoure/ppo_jax."""
++    counts = np.zeros((13, 13))
+     num_total_epochs = int(config.num_train_steps // config.num_train_envs + 1)
+     num_steps_warm_up = int(config.num_train_steps * config.lr_warmup)
+     schedule_fn = optax.linear_schedule(
+@@ -214,11 +202,7 @@ def train_ppo(rng, config, model, params, mle_log):
+         optax.scale_by_schedule(schedule_fn),
+     )
+ 
+-    train_state = TrainState.create(
+-        apply_fn=model.apply,
+-        params=params,
+-        tx=tx,
+-    )
++    train_state = TrainState.create(apply_fn=model.apply, params=params, tx=tx,)
+     # Setup the rollout manager -> Collects data in vmapped-fashion over envs
+     rollout_manager = RolloutManager(
+         model, config.env_name, config.env_kwargs, config.env_params
+@@ -241,6 +225,7 @@ def train_ppo(rng, config, model, params, mle_log):
+         batch,
+         rng: jax.random.PRNGKey,
+         num_train_envs: int,
++        counts: jnp.ndarray,
+     ):
+         action, log_pi, value, new_key = rollout_manager.select_action(
+             train_state, obs, rng
+@@ -252,9 +237,7 @@ def train_ppo(rng, config, model, params, mle_log):
+         next_obs, next_state, reward, done, _ = rollout_manager.batch_step(
+             b_rng, state, action
+         )
+-        batch = batch_manager.append(
+-            batch, obs, action, reward, done, log_pi, value
+-        )
++        batch = batch_manager.append(batch, obs, action, reward, done, log_pi, value)
+         return train_state, next_obs, next_state, batch, new_key
+ 
+     batch = batch_manager.reset()
+@@ -275,7 +258,9 @@ def train_ppo(rng, config, model, params, mle_log):
+             batch,
+             rng_step,
+             config.num_train_envs,
++            jnp.array(counts),
+         )
++        update_counts(counts, obs)
+         total_steps += config.num_train_envs
+         if step % (config.n_steps + 1) == 0:
+             metric_dict, train_state, rng_update = update(
+@@ -295,15 +280,18 @@ def train_ppo(rng, config, model, params, mle_log):
+         if (step + 1) % config.evaluate_every_epochs == 0:
+             rng, rng_eval = jax.random.split(rng)
+             rewards = rollout_manager.batch_evaluate(
+-                rng_eval,
+-                train_state,
+-                config.num_test_rollouts,
++                rng_eval, train_state, config.num_test_rollouts,
+             )
++
+             log_steps.append(total_steps)
+             log_return.append(rewards)
+             t.set_description(f"R: {str(rewards)}")
+             t.refresh()
++            log_value_predictions(
++                model, train_state, rollout_manager, rng, use_wandb, counts
++            )
+ 
++            model.apply(train_state.params, obs, rng)
+             if mle_log is not None:
+                 mle_log.update(
+                     {"num_steps": total_steps},
+@@ -319,6 +307,49 @@ def train_ppo(rng, config, model, params, mle_log):
+     )
+ 
+ 
++def log_value_predictions(
++    model,
++    train_state: TrainState,
++    rollout_manager: RolloutManager,
++    rng: jax.random.PRNGKey,
++    use_wandb: bool,
++    counts: np.ndarray,
++) -> None:
++
++    # binary_map = np.array(string_to_bool_map(four_rooms_map)).astype(int).astype(float)
++    binary_map = np.zeros((13, 13))
++    preds = model.apply(
++        train_state.params, ((rollout_manager.env.coords / 13) - 0.5), rng
++    )
++    all_coordinates = [
++        [np.array(i)[0], np.array(i)[1]] for i in rollout_manager.env.coords
++    ]
++    for index, val in enumerate(all_coordinates):
++        i, j = val[0], val[1]
++        binary_map[i, j] = np.array(preds[0][index])
++
++    # log to wandb
++    if use_wandb:
++        import plotly.graph_objects as go
++
++        fig = go.Figure(
++            data=go.Heatmap(
++                z=binary_map,
++                x=np.arange(0, 13),
++                y=np.arange(0, 13),
++                colorscale="Viridis",
++            )
++        )
++        wandb.log({"value_predictions": fig})
++
++        fig = go.Figure(
++            data=go.Heatmap(
++                z=counts, x=np.arange(0, 13), y=np.arange(0, 13), colorscale="Viridis",
++            )
++        )
++        wandb.log({"counts": fig})
++
++
+ @jax.jit
+ def flatten_dims(x):
+     return x.swapaxes(0, 1).reshape(x.shape[0] * x.shape[1], *x.shape[2:])
+@@ -345,9 +376,7 @@ def loss_actor_and_critic(
+     # And why with 0 breaks gaussian model pi
+     log_prob = pi.log_prob(action[..., -1])
+ 
+-    value_pred_clipped = value_old + (value_pred - value_old).clip(
+-        -clip_eps, clip_eps
+-    )
++    value_pred_clipped = value_old + (value_pred - value_old).clip(-clip_eps, clip_eps)
+     value_losses = jnp.square(value_pred - target)
+     value_losses_clipped = jnp.square(value_pred_clipped - target)
+     value_loss = 0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
+@@ -362,17 +391,11 @@ def loss_actor_and_critic(
+ 
+     entropy = pi.entropy().mean()
+ 
+-    total_loss = (
+-        loss_actor + critic_coeff * value_loss - entropy_coeff * entropy
+-    )
++    total_loss = loss_actor + critic_coeff * value_loss - entropy_coeff * entropy
+ 
+-    return total_loss, (
+-        value_loss,
+-        loss_actor,
+-        entropy,
+-        value_pred.mean(),
+-        target.mean(),
+-        gae_mean,
++    return (
++        total_loss,
++        (value_loss, loss_actor, entropy, value_pred.mean(), target.mean(), gae_mean,),
+     )
+ 
+ 
+@@ -416,13 +439,9 @@ def update(
+             critic_coeff,
+         )
+ 
+-        total_loss, (
+-            value_loss,
+-            loss_actor,
+-            entropy,
+-            value_pred,
+-            target_val,
+-            gae_val,
++        (
++            total_loss,
++            (value_loss, loss_actor, entropy, value_pred, target_val, gae_val,),
+         ) = total_loss
+ 
+         avg_metrics_dict["total_loss"] += np.asarray(total_loss)
+diff --git a/utils/vec_env/parallel.py b/utils/vec_env/parallel.py
+index 8432c08..529160f 100755
+--- a/utils/vec_env/parallel.py
++++ b/utils/vec_env/parallel.py
+@@ -1,6 +1,8 @@
++from multiprocessing import Pipe, Process
++
+ import numpy as np
+-from multiprocessing import Process, Pipe
+-from utils.vec_env.vectorize import VecEnv, CloudpickleWrapper
++
++from utils.vec_env.vectorize import CloudpickleWrapper, VecEnv
+ 
+ # Imported from https://github.com/openai/baselines/tree/master/baselines/common/vec_envs
+ 
+@@ -44,7 +46,9 @@ class SubprocVecEnv(VecEnv):
+             )
+         ]
+         for p in self.ps:
+-            p.daemon = True  # if the main process crashes, we should not cause things to hang
++            p.daemon = (
++                True  # if the main process crashes, we should not cause things to hang
++            )
+             p.start()
+         for remote in self.work_remotes:
+             remote.close()
+@@ -86,9 +90,7 @@ class DummyVecEnv(VecEnv):
+     def __init__(self, env_fns):
+         self.envs = [fn() for fn in env_fns]
+         env = self.envs[0]
+-        VecEnv.__init__(
+-            self, len(env_fns), env.observation_space, env.action_space
+-        )
++        VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space)
+         self.ts = np.zeros(len(self.envs), dtype="int")
+         self.actions = None
+ 
+diff --git a/utils/vec_env/vectorize.py b/utils/vec_env/vectorize.py
+index d9a55ed..fa33af6 100755
+--- a/utils/vec_env/vectorize.py
++++ b/utils/vec_env/vectorize.py
+@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
+ 
+ # Imported from https://github.com/openai/baselines/tree/master/baselines/common/vec_envs
+ 
++
+ class AlreadySteppingError(Exception):
+     """
+     Raised when an asynchronous step is running while
+@@ -11,7 +12,7 @@ class AlreadySteppingError(Exception):
+     """
+ 
+     def __init__(self):
+-        msg = 'already running an async step'
++        msg = "already running an async step"
+         Exception.__init__(self, msg)
+ 
+ 
+@@ -22,7 +23,7 @@ class NotSteppingError(Exception):
+     """
+ 
+     def __init__(self):
+-        msg = 'not running an async step'
++        msg = "not running an async step"
+         Exception.__init__(self, msg)
+ 
+ 
+@@ -33,12 +34,11 @@ class VecEnv(ABC):
+     each observation becomes an batch of observations, and expected action is a batch of actions to
+     be applied per-environment.
+     """
++
+     closed = False
+     viewer = None
+ 
+-    metadata = {
+-        'render.modes': ['human', 'rgb_array']
+-    }
++    metadata = {"render.modes": ["human", "rgb_array"]}
+ 
+     def __init__(self, num_envs, observation_space, action_space):
+         self.num_envs = num_envs
+@@ -123,9 +123,11 @@ class VecEnv(ABC):
+     def get_viewer(self):
+         if self.viewer is None:
+             from gym.envs.classic_control import rendering
++
+             self.viewer = rendering.SimpleImageViewer()
+         return self.viewer
+ 
++
+ class VecEnvWrapper(VecEnv):
+     """
+     An environment wrapper that applies to an entire batch
+@@ -134,9 +136,11 @@ class VecEnvWrapper(VecEnv):
+ 
+     def __init__(self, venv, observation_space=None, action_space=None):
+         self.venv = venv
+-        super().__init__(num_envs=venv.num_envs,
+-                        observation_space=observation_space or venv.observation_space,
+-                        action_space=action_space or venv.action_space)
++        super().__init__(
++            num_envs=venv.num_envs,
++            observation_space=observation_space or venv.observation_space,
++            action_space=action_space or venv.action_space,
++        )
+ 
+     def step_async(self, actions):
+         self.venv.step_async(actions)
+@@ -152,17 +156,20 @@ class VecEnvWrapper(VecEnv):
+     def close(self):
+         return self.venv.close()
+ 
+-    def render(self, mode='human'):
++    def render(self, mode="human"):
+         return self.venv.render(mode=mode)
+ 
+     def get_images(self):
+         return self.venv.get_images()
+ 
+     def __getattr__(self, name):
+-        if name.startswith('_'):
+-            raise AttributeError("attempted to get missing private attribute '{}'".format(name))
++        if name.startswith("_"):
++            raise AttributeError(
++                "attempted to get missing private attribute '{}'".format(name)
++            )
+         return getattr(self.venv, name)
+ 
++
+ class VecEnvObservationWrapper(VecEnvWrapper):
+     @abstractmethod
+     def process(self, obs):
+@@ -176,6 +183,7 @@ class VecEnvObservationWrapper(VecEnvWrapper):
+         obs, rews, dones, infos = self.venv.step_wait()
+         return self.process(obs), rews, dones, infos
+ 
++
+ class CloudpickleWrapper(object):
+     """
+     Uses cloudpickle to serialize contents (otherwise multiprocessing tries to use pickle)
+@@ -186,10 +194,12 @@ class CloudpickleWrapper(object):
+ 
+     def __getstate__(self):
+         import cloudpickle
++
+         return cloudpickle.dumps(self.x)
+ 
+     def __setstate__(self, ob):
+         import pickle
++
+         self.x = pickle.loads(ob)
+ 
+ 
+@@ -202,7 +212,7 @@ def clear_mpi_env_vars():
+     """
+     removed_environment = {}
+     for k, v in list(os.environ.items()):
+-        for prefix in ['OMPI_', 'PMI_']:
++        for prefix in ["OMPI_", "PMI_"]:
+             if k.startswith(prefix):
+                 removed_environment[k] = v
+                 del os.environ[k]
+diff --git a/utils/vec_env/wrapper.py b/utils/vec_env/wrapper.py
+index e7e636d..f42e912 100644
+--- a/utils/vec_env/wrapper.py
++++ b/utils/vec_env/wrapper.py
+@@ -1,18 +1,10 @@
+ import gym
+ import numpy as np
++from bsuite.environments import (bandit, catch, deep_sea, discounting_chain,
++                                 memory_chain, mnist, umbrella_chain)
+ 
+ from utils.vec_env.parallel import DummyVecEnv, SubprocVecEnv
+ 
+-from bsuite.environments import (
+-    catch,
+-    deep_sea,
+-    discounting_chain,
+-    memory_chain,
+-    umbrella_chain,
+-    mnist,
+-    bandit,
+-)
+-
+ 
+ def make_env(env_name: str):
+     if env_name in [
+diff --git a/visualize.py b/visualize.py
+index 6d7d58c..3c974a0 100644
+--- a/visualize.py
++++ b/visualize.py
+@@ -1,9 +1,10 @@
+-import numpy as np
+-import jax
+ import gymnax
++import jax
++import numpy as np
+ from gymnax.visualize import Visualizer
++
++from utils.helpers import load_config, load_pkl_object
+ from utils.models import get_model_ready
+-from utils.helpers import load_pkl_object, load_config
+ 
+ 
+ def load_neural_network(config, agent_path):
+@@ -87,9 +88,7 @@ if __name__ == "__main__":
+     base = f"agents/{args.env_name}/{args.train_type}"
+     configs = load_config(base + ".yaml")
+     if not args.random:
+-        model, model_params = load_neural_network(
+-            configs.train_config, base + ".pkl"
+-        )
++        model, model_params = load_neural_network(configs.train_config, base + ".pkl")
+     else:
+         model, model_params = None, None
+     env, env_params = gymnax.make(
+@@ -97,8 +96,6 @@ if __name__ == "__main__":
+         **configs.train_config.env_kwargs,
+     )
+     env_params.replace(**configs.train_config.env_params)
+-    state_seq, cum_rewards = rollout_episode(
+-        env, env_params, model, model_params
+-    )
++    state_seq, cum_rewards = rollout_episode(env, env_params, model, model_params)
+     vis = Visualizer(env, env_params, state_seq, cum_rewards)
+     vis.animate(f"docs/{args.env_name}.gif")
