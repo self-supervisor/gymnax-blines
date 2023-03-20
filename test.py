@@ -188,3 +188,10 @@ def test_update_epoch_RND(RND, distiller_train_state, observation_batch):
         targets=targets,
     )
     assert initial_loss > total_loss
+
+
+def test_CategoricalSeparateMLP(PPO):
+    PPO_model, PPO_params = PPO
+    assert PPO_model.num_output_units == 2
+    assert PPO_model.scale == 1
+    assert PPO_model.novelty_switch == 10000
