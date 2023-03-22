@@ -40,43 +40,32 @@ class BatchManager:
     def reset(self):
         return {
             "states": jnp.empty(
-                (self.n_steps, self.num_envs, *self.state_shape),
-                dtype=jnp.float32,
+                (self.n_steps, self.num_envs, *self.state_shape), dtype=jnp.float32,
             ),
-            "actions": jnp.empty(
-                (self.n_steps, self.num_envs, *self.action_size),
-            ),
-            "rewards": jnp.empty(
-                (self.n_steps, self.num_envs), dtype=jnp.float32
-            ),
+            "actions": jnp.empty((self.n_steps, self.num_envs, *self.action_size),),
+            "rewards": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
             "dones": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.uint8),
-            "log_pis_old": jnp.empty(
-                (self.n_steps, self.num_envs), dtype=jnp.float32
-            ),
-            "values_old": jnp.empty(
-                (self.n_steps, self.num_envs), dtype=jnp.float32
-            ),
+            "log_pis_old": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
+            "values_old": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
             "_p": 0,
         }
 
     @partial(jax.jit, static_argnums=0)
     def append(self, buffer, state, action, reward, done, log_pi, value):
         return {
-                "states":  buffer["states"].at[buffer["_p"]].set(state),
-                "actions": buffer["actions"].at[buffer["_p"]].set(action),
-                "rewards": buffer["rewards"].at[buffer["_p"]].set(reward.squeeze()),
-                "dones": buffer["dones"].at[buffer["_p"]].set(done.squeeze()),
-                "log_pis_old": buffer["log_pis_old"].at[buffer["_p"]].set(log_pi),
-                "values_old": buffer["values_old"].at[buffer["_p"]].set(value),
-                "_p": (buffer["_p"] + 1) % self.n_steps,
-            }
+            "states": buffer["states"].at[buffer["_p"]].set(state),
+            "actions": buffer["actions"].at[buffer["_p"]].set(action),
+            "rewards": buffer["rewards"].at[buffer["_p"]].set(reward.squeeze()),
+            "dones": buffer["dones"].at[buffer["_p"]].set(done.squeeze()),
+            "log_pis_old": buffer["log_pis_old"].at[buffer["_p"]].set(log_pi),
+            "values_old": buffer["values_old"].at[buffer["_p"]].set(value),
+            "_p": (buffer["_p"] + 1) % self.n_steps,
+        }
 
     @partial(jax.jit, static_argnums=0)
     def get(self, buffer):
         gae, target = self.calculate_gae(
-            value=buffer["values_old"],
-            reward=buffer["rewards"],
-            done=buffer["dones"],
+            value=buffer["values_old"], reward=buffer["rewards"], done=buffer["dones"],
         )
         batch = (
             buffer["states"][:-1],
@@ -108,8 +97,14 @@ class RolloutManager(object):
     def __init__(self, model, env_name, env_kwargs, env_params):
         # Setup functionalities for vectorized batch rollout
         self.env_name = env_name
+        # training env
         self.env, self.env_params = gymnax.make(env_name, **env_kwargs)
         self.env_params = self.env_params.replace(**env_params)
+
+        # testing env
+        self.env, self.env_params = gymnax.make(env_name, **env_kwargs)
+        self.env_params = self.env_params.replace(**env_params)
+
         self.observation_space = self.env.observation_space(self.env_params)
         self.action_size = self.env.action_space(self.env_params).shape
         self.apply_fn = model.apply
@@ -117,10 +112,7 @@ class RolloutManager(object):
 
     @partial(jax.jit, static_argnums=0)
     def select_action_ppo(
-        self,
-        train_state: TrainState,
-        obs: jnp.ndarray,
-        rng: jax.random.PRNGKey,
+        self, train_state: TrainState, obs: jnp.ndarray, rng: jax.random.PRNGKey,
     ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jax.random.PRNGKey]:
         value, pi = policy(train_state.apply_fn, train_state.params, obs, rng)
         action = pi.sample(seed=rng)
@@ -128,9 +120,10 @@ class RolloutManager(object):
         return action, log_prob, value[:, 0], rng
 
     @partial(jax.jit, static_argnums=0)
-    def batch_reset(self, keys):
-        return jax.vmap(self.env.reset, in_axes=(0, None))(
-            keys, self.env_params
+    def batch_reset(self, keys, training):
+        # jax.debug.breakpoint()
+        return jax.vmap(self.env.reset, in_axes=(0, 0, None))(
+            keys, jnp.array([training] * keys.shape[0]), self.env_params,
         )
 
     @partial(jax.jit, static_argnums=0)
@@ -140,11 +133,11 @@ class RolloutManager(object):
         )
 
     @partial(jax.jit, static_argnums=(0, 3))
-    def batch_evaluate(self, rng_input, train_state, num_envs):
+    def batch_evaluate(self, rng_input, train_state, num_envs, training):
         """Rollout an episode with lax.scan."""
         # Reset the environment
         rng_reset, rng_episode = jax.random.split(rng_input)
-        obs, state = self.batch_reset(jax.random.split(rng_reset, num_envs))
+        obs, state = self.batch_reset(jax.random.split(rng_reset, num_envs), training)
 
         def policy_step(state_input, _):
             """lax.scan compatible step transition in jax env."""
@@ -152,20 +145,14 @@ class RolloutManager(object):
             rng, rng_step, rng_net = jax.random.split(rng, 3)
             action, _, _, rng = self.select_action(train_state, obs, rng_net)
             next_o, next_s, reward, done, _ = self.batch_step(
-                jax.random.split(rng_step, num_envs),
-                state,
-                action.squeeze(),
+                jax.random.split(rng_step, num_envs), state, action.squeeze(),
             )
             new_cum_reward = cum_reward + reward * valid_mask
             new_valid_mask = valid_mask * (1 - done)
-            carry, y = [
-                next_o,
-                next_s,
-                train_state,
-                rng,
-                new_cum_reward,
-                new_valid_mask,
-            ], [new_valid_mask]
+            carry, y = (
+                [next_o, next_s, train_state, rng, new_cum_reward, new_valid_mask,],
+                [new_valid_mask],
+            )
             return carry, y
 
         # Scan over episode step loop
@@ -214,11 +201,7 @@ def train_ppo(rng, config, model, params, mle_log):
         optax.scale_by_schedule(schedule_fn),
     )
 
-    train_state = TrainState.create(
-        apply_fn=model.apply,
-        params=params,
-        tx=tx,
-    )
+    train_state = TrainState.create(apply_fn=model.apply, params=params, tx=tx,)
     # Setup the rollout manager -> Collects data in vmapped-fashion over envs
     rollout_manager = RolloutManager(
         model, config.env_name, config.env_kwargs, config.env_params
@@ -252,29 +235,22 @@ def train_ppo(rng, config, model, params, mle_log):
         next_obs, next_state, reward, done, _ = rollout_manager.batch_step(
             b_rng, state, action
         )
-        batch = batch_manager.append(
-            batch, obs, action, reward, done, log_pi, value
-        )
+        batch = batch_manager.append(batch, obs, action, reward, done, log_pi, value)
         return train_state, next_obs, next_state, batch, new_key
 
     batch = batch_manager.reset()
 
     rng, rng_step, rng_reset, rng_eval, rng_update = jax.random.split(rng, 5)
     obs, state = rollout_manager.batch_reset(
-        jax.random.split(rng_reset, config.num_train_envs)
+        jax.random.split(rng_reset, config.num_train_envs), training=1
     )
 
     total_steps = 0
-    log_steps, log_return = [], []
+    log_steps, log_return_train, log_return_test = [], [], []
     t = tqdm.tqdm(range(1, num_total_epochs + 1), desc="PPO", leave=True)
     for step in t:
         train_state, obs, state, batch, rng_step = get_transition(
-            train_state,
-            obs,
-            state,
-            batch,
-            rng_step,
-            config.num_train_envs,
+            train_state, obs, state, batch, rng_step, config.num_train_envs,
         )
         total_steps += config.num_train_envs
         if step % (config.n_steps + 1) == 0:
@@ -294,27 +270,30 @@ def train_ppo(rng, config, model, params, mle_log):
 
         if (step + 1) % config.evaluate_every_epochs == 0:
             rng, rng_eval = jax.random.split(rng)
-            rewards = rollout_manager.batch_evaluate(
-                rng_eval,
-                train_state,
-                config.num_test_rollouts,
+            rewards_train = rollout_manager.batch_evaluate(
+                rng_eval, train_state, config.num_test_rollouts, training=1
+            )
+            rewards_test = rollout_manager.batch_evaluate(
+                rng_eval, train_state, config.num_test_rollouts, training=0
             )
             log_steps.append(total_steps)
-            log_return.append(rewards)
-            t.set_description(f"R: {str(rewards)}")
+            log_return_train.append(rewards_train)
+            log_return_test.append(rewards_test)
+            t.set_description(f"R: {str(rewards_train)}")
             t.refresh()
 
             if mle_log is not None:
                 mle_log.update(
                     {"num_steps": total_steps},
-                    {"return": rewards},
+                    {"return": rewards_train},
                     model=train_state.params,
                     save=True,
                 )
 
     return (
         log_steps,
-        log_return,
+        log_return_train,
+        log_return_test,
         train_state.params,
     )
 
@@ -345,9 +324,7 @@ def loss_actor_and_critic(
     # And why with 0 breaks gaussian model pi
     log_prob = pi.log_prob(action[..., -1])
 
-    value_pred_clipped = value_old + (value_pred - value_old).clip(
-        -clip_eps, clip_eps
-    )
+    value_pred_clipped = value_old + (value_pred - value_old).clip(-clip_eps, clip_eps)
     value_losses = jnp.square(value_pred - target)
     value_losses_clipped = jnp.square(value_pred_clipped - target)
     value_loss = 0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
@@ -362,17 +339,11 @@ def loss_actor_and_critic(
 
     entropy = pi.entropy().mean()
 
-    total_loss = (
-        loss_actor + critic_coeff * value_loss - entropy_coeff * entropy
-    )
+    total_loss = loss_actor + critic_coeff * value_loss - entropy_coeff * entropy
 
-    return total_loss, (
-        value_loss,
-        loss_actor,
-        entropy,
-        value_pred.mean(),
-        target.mean(),
-        gae_mean,
+    return (
+        total_loss,
+        (value_loss, loss_actor, entropy, value_pred.mean(), target.mean(), gae_mean,),
     )
 
 
@@ -416,13 +387,9 @@ def update(
             critic_coeff,
         )
 
-        total_loss, (
-            value_loss,
-            loss_actor,
-            entropy,
-            value_pred,
-            target_val,
-            gae_val,
+        (
+            total_loss,
+            (value_loss, loss_actor, entropy, value_pred, target_val, gae_val,),
         ) = total_loss
 
         avg_metrics_dict["total_loss"] += np.asarray(total_loss)

@@ -95,7 +95,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--wandb",
         type=lambda x: bool(strtobool(x)),
-        default=True,
+        default=False,
         nargs="?",
         const=True,
         help="whether to log with wandb",
