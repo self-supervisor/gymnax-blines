@@ -1,6 +1,6 @@
 train_config:
   train_type: "PPO"
-  num_train_steps: 120000
+  num_train_steps: 1200000
   evaluate_every_epochs: 1000
 
   env_name: "FourRooms-misc"

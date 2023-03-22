@@ -134,8 +134,10 @@ class RolloutManager(object):
         return action, log_prob, value[:, 0], rng
 
     @partial(jax.jit, static_argnums=0)
-    def batch_reset(self, keys):
-        return jax.vmap(self.env.reset, in_axes=(0, None))(keys, self.env_params)
+    def batch_reset(self, keys, training):
+        return jax.vmap(self.env.reset, in_axes=(0, 0, None))(
+            keys, jnp.array([training] * keys.shape[0]), self.env_params
+        )
 
     @partial(jax.jit, static_argnums=0)
     def batch_step(self, keys, state, action):
@@ -144,11 +146,11 @@ class RolloutManager(object):
         )
 
     @partial(jax.jit, static_argnums=(0, 3))
-    def batch_evaluate(self, rng_input, train_state, num_envs, counts):
+    def batch_evaluate(self, rng_input, train_state, num_envs, counts, training):
         """Rollout an episode with lax.scan."""
         # Reset the environment
         rng_reset, rng_episode = jax.random.split(rng_input)
-        obs, state = self.batch_reset(jax.random.split(rng_reset, num_envs))
+        obs, state = self.batch_reset(jax.random.split(rng_reset, num_envs), training)
 
         def policy_step(state_input, _):
             """lax.scan compatible step transition in jax env."""
@@ -274,11 +276,11 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
 
     rng, rng_step, rng_reset, rng_eval, rng_update = jax.random.split(rng, 5)
     obs, state = rollout_manager.batch_reset(
-        jax.random.split(rng_reset, config.num_train_envs)
+        jax.random.split(rng_reset, config.num_train_envs), training=1
     )
 
     total_steps = 0
-    log_steps, log_return = [], []
+    log_steps, log_return_train, log_return_test = [], [], []
     t = tqdm.tqdm(range(1, num_total_epochs + 1), desc="PPO", leave=True)
     for step in t:
         train_state, obs, state, batch, new_values, rng_step = get_transition(
@@ -311,13 +313,17 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
 
         if (step + 1) % config.evaluate_every_epochs == 0:
             rng, rng_eval = jax.random.split(rng)
-            rewards = rollout_manager.batch_evaluate(
-                rng_eval, train_state, config.num_test_rollouts, counts
+            rewards_train = rollout_manager.batch_evaluate(
+                rng_eval, train_state, config.num_test_rollouts, counts, training=1
+            )
+            rewards_test = rollout_manager.batch_evaluate(
+                rng_eval, train_state, config.num_test_rollouts, counts, training=0
             )
 
             log_steps.append(total_steps)
-            log_return.append(rewards)
-            t.set_description(f"R: {str(rewards)}")
+            log_return_train.append(rewards_train)
+            log_return_test.append(rewards_test)
+            t.set_description(f"R: {str(rewards_train)}")
             t.refresh()
             log_value_predictions(
                 use_wandb, model, train_state, rollout_manager, rng, counts
@@ -327,14 +333,15 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
             if mle_log is not None:
                 mle_log.update(
                     {"num_steps": total_steps},
-                    {"return": rewards},
+                    {"return": rewards_train},
                     model=train_state.params,
                     save=True,
                 )
 
     return (
         log_steps,
-        log_return,
+        log_return_train,
+        log_return_test,
         train_state.params,
     )
 

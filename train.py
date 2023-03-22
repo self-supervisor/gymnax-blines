@@ -40,18 +40,27 @@ def main(
         raise ValueError("Unknown train_type. Has to be in ('ES', 'PPO').")
 
     # Log and store the results.
-    log_steps, log_return, network_ckpt = train_fn(
+    log_steps, log_return_train, log_return_test, network_ckpt = train_fn(
         rng, config, model, params, mle_log, use_wandb
     )
 
     if use_wandb:
-        log_return = [np.array(i) for i in log_return]
-        for i in range(len(log_return)):
-            wandb.log({"steps": log_steps[i], "return": log_return[i]})
-        wandb.log({"total_return": np.sum(log_return)})
+        log_return_train = [np.array(i) for i in log_return_train]
+        log_return_test = [np.array(i) for i in log_return_test]
+        for i in range(len(log_return_train)):
+            wandb.log(
+                {
+                    "steps": log_steps[i],
+                    "return_train": log_return_train[i],
+                    "test_return": log_return_test[i],
+                }
+            )
+        wandb.log({"total_return_train": np.sum(log_return_train)})
+        wandb.log({"total_return_train": np.sum(log_return_test)})
     data_to_store = {
         "log_steps": log_steps,
-        "log_return": log_return,
+        "log_return_train": log_return_train,
+        "log_return_test": log_return_test,
         "network": network_ckpt,
         "train_config": config,
     }
@@ -85,23 +94,15 @@ if __name__ == "__main__":
         help="Path to configuration yaml.",
     )
     parser.add_argument(
-        "-seed",
-        "--seed_id",
-        type=int,
-        default=0,
-        help="Random seed of experiment.",
+        "-seed", "--seed_id", type=int, default=0, help="Random seed of experiment.",
     )
     parser.add_argument(
-        "-lr",
-        "--lrate",
-        type=float,
-        default=5e-04,
-        help="learning rate of PPO agent",
+        "-lr", "--lrate", type=float, default=5e-04, help="learning rate of PPO agent",
     )
     parser.add_argument(
         "--scale",
         type=float,
-        default=1,
+        default=10,
         help="Scale of the frequency in the SIREN network",
     )
     parser.add_argument(

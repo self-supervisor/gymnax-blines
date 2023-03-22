@@ -112,7 +112,7 @@ class FourRooms(environment.Environment):
         self.coords = jnp.array(coords)
         self.train_indices = jnp.array(train_indices)
         self.test_indices = jnp.array(test_indices)
-        # self.counts = jnp.zeros_like(jnp.array(coords))
+        self.counts = jnp.zeros_like(jnp.array(coords))
         self.directions = jnp.array([[-1, 0], [0, 1], [1, 0], [0, -1]])
 
         # Any open space in the map can be a goal for the agent
@@ -147,7 +147,7 @@ class FourRooms(environment.Environment):
         in_map = self.env_map[p[0], p[1]]
         new_pos = jax.lax.select(in_map, p, state.pos)
         in_lava = self.env_map[p[0], p[1]]  # self.env_map[new_pos[0], new_pos[1]]
-        # self.counts = self.counts.at[new_pos[0], new_pos[1]].add(1)
+        self.counts = self.counts.at[new_pos[0], new_pos[1]].add(1)
 
         reward = (
             -0.1
