@@ -39,33 +39,33 @@ xxxxxxxxxxxxx"""
 
 train_four_rooms_map = """
 xxxxxxxxxxxxx
-x     x     x
-x     x     x
-x           x
-x     x     x
-x     x     x
-xx xxxx     x
-xxxxxxxxx xxx
 xxxxxxx     x
 xxxxxxx     x
 xxxxxxx     x
 xxxxxxx     x
+xxxxxxx     x
+xxxxxxx     x
+x     xxx xxx
+x     x     x
+x     x     x
+x     x     x
+x     x     x
 xxxxxxxxxxxxx"""
 
-test_four_rooms_map = """
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-x     xxxxxxx
-x     xxxxxxx
-x     xxxxxxx
-x     xxxxxxx
-x     xxxxxxx
-xxxxxxxxxxxxx"""
+# test_four_rooms_map = """
+# xxxxxxxxxxxxx
+# xxxxxxxxxxxxx
+# xxxxxxxxxxxxx
+# xxxxxxxxxxxxx
+# xxxxxxxxxxxxx
+# xxxxxxxxxxxxx
+# xxxxxxxxxxxxx
+# x     xxxxxxx
+# x     xxxxxxx
+# x     xxxxxxx
+# x     xxxxxxx
+# x     xxxxxxx
+# xxxxxxxxxxxxx"""
 
 
 def string_to_bool_map(str_map: str) -> chex.Array:
@@ -86,13 +86,13 @@ class FourRooms(environment.Environment):
     def __init__(
         self,
         use_visual_obs: bool = False,
-        goal_fixed: List[int] = [1, 11],
+        goal_fixed: List[int] = [10, 10],
         pos_fixed: List[int] = [4, 1],
     ):
         super().__init__()
         self.env_map = string_to_bool_map(four_rooms_map)
         self.train_map = string_to_bool_map(train_four_rooms_map)
-        self.test_map = string_to_bool_map(test_four_rooms_map)
+        # self.test_map = string_to_bool_map(test_four_rooms_map)
         self.occupied_map = 1 - self.env_map
         coords = []
         train_indices = []
@@ -105,7 +105,7 @@ class FourRooms(environment.Environment):
                     coords.append([y, x])
                 if self.train_map[y, x]:
                     train_indices.append([y, x])
-                if self.test_map[y, x]:
+                else:
                     test_indices.append([y, x])
                 count += 1
 
@@ -146,16 +146,9 @@ class FourRooms(environment.Environment):
         p = state.pos + self.directions[action]
         in_map = self.env_map[p[0], p[1]]
         new_pos = jax.lax.select(in_map, p, state.pos)
-        in_lava = self.env_map[p[0], p[1]]  # self.env_map[new_pos[0], new_pos[1]]
-        self.counts = self.counts.at[new_pos[0], new_pos[1]].add(1)
-
-        reward = (
-            -0.1
-            + 10
-            * jnp.logical_and(new_pos[0] == state.goal[0], new_pos[1] == state.goal[1])
-            + -0.1 * in_lava
+        reward = jnp.logical_and(
+            new_pos[0] == state.goal[0], new_pos[1] == state.goal[1]
         )
-        # reward = -0.1 * self.counts[new_pos[0], new_pos[1]]
 
         # Update state dict and evaluate termination conditions
         state = EnvState(new_pos, state.goal, state.time + 1)
@@ -167,6 +160,39 @@ class FourRooms(environment.Environment):
             done,
             {"discount": self.discount(state, params)},
         )
+
+        # key_random, key_action = jax.random.split(key)
+        # # Sample whether to choose a random action
+        # choose_random = jax.random.uniform(key_random, ()) < params.fail_prob * 4 / 3
+        # action = jax.lax.select(
+        #     choose_random, self.action_space(params).sample(key_action), action
+        # )
+
+        # p = state.pos + self.directions[action]
+        # in_map = self.env_map[p[0], p[1]]
+        # new_pos = jax.lax.select(in_map, p, state.pos)
+        # in_lava = self.env_map[p[0], p[1]]  # self.env_map[new_pos[0], new_pos[1]]
+        # self.counts = self.counts.at[new_pos[0], new_pos[1]].add(1)
+
+        # reward = (
+        #     # -0.1
+        #     # + 10
+        #     jnp.logical_and(new_pos[0] == state.goal[0], new_pos[1] == state.goal[1])
+        #     # + -0.1 * in_lava
+        # )
+        # # reward = -0.1 * self.counts[new_pos[0], new_pos[1]]
+
+        # # Update state dict and evaluate termination conditions
+        # state = EnvState(new_pos, state.goal, state.time + 1)
+
+        # done = self.is_terminal(state, params)
+        # return (
+        #     lax.stop_gradient(self.get_obs(state)),
+        #     lax.stop_gradient(state),
+        #     reward,
+        #     done,
+        #     {"discount": self.discount(state, params)},
+        # )
 
     def reset_env(
         self, key: chex.PRNGKey, training: int, params: EnvParams,
@@ -181,8 +207,9 @@ class FourRooms(environment.Environment):
         pos_new = reset_pos(
             rng_pos, self.coords, self.train_indices, self.test_indices, goal, training
         )
-
         pos = jax.lax.select(params.resample_init_pos, pos_new, self.pos_fixed)
+        # jax.debug.print("params.resample_init_pos {}", params.resample_init_pos)
+        # jax.debug.print("pos {}", pos)
         state = EnvState(pos, goal, 0)
         return self.get_obs(state), state
 
@@ -198,6 +225,19 @@ class FourRooms(environment.Environment):
             obs_array = jnp.stack([self.occupied_map, agent_map], axis=2)
             return obs_array
 
+    # def is_terminal(self, state: EnvState, params: EnvParams) -> bool:
+    #     """Check whether state is terminal."""
+    #     # Check number of steps in episode termination condition
+    #     done_steps = state.time >= params.max_steps_in_episode
+    #     # Check if agent has found the goal
+    #     done_goal = jnp.logical_and(
+    #         state.pos[0] == state.goal[0], state.pos[1] == state.goal[1],
+    #     )
+    #     done_not_dead = jnp.logical_or(done_goal, done_steps)
+    #     in_map = self.env_map[state.pos[0], state.pos[1]]
+    #     done_dead = jax.lax.select(in_map, True, False)
+    #     done = jnp.logical_or(done_not_dead, done_dead)
+    #     return done_goal
     def is_terminal(self, state: EnvState, params: EnvParams) -> bool:
         """Check whether state is terminal."""
         # Check number of steps in episode termination condition
@@ -206,11 +246,8 @@ class FourRooms(environment.Environment):
         done_goal = jnp.logical_and(
             state.pos[0] == state.goal[0], state.pos[1] == state.goal[1],
         )
-        done_not_dead = jnp.logical_or(done_goal, done_steps)
-        in_map = self.env_map[state.pos[0], state.pos[1]]
-        done_dead = jax.lax.select(in_map, True, False)
-        done = jnp.logical_or(done_not_dead, done_dead)
-        return done_goal
+        done = jnp.logical_or(done_goal, done_steps)
+        return done
 
     def get_counts(self) -> chex.Array:
         """Return count frequencies of agent positions."""
@@ -287,6 +324,16 @@ def reset_goal(
     return goal
 
 
+# def reset_pos(rng: chex.PRNGKey, coords: chex.Array, goal: chex.Array) -> chex.Array:
+#     """Reset the position of the agent."""
+# pos_index = jax.random.randint(rng, (), 0, coords.shape[0] - 1)
+# collision = jnp.logical_and(
+#     coords[pos_index][0] == goal[0], coords[pos_index][1] == goal[1]
+# )
+# pos_index = jax.lax.select(collision, coords.shape[0] - 1, pos_index)
+# return coords[pos_index][:]
+
+
 def reset_pos(
     rng: chex.PRNGKey,
     coords: chex.Array,
@@ -296,9 +343,17 @@ def reset_pos(
     training: chex.Array,
 ) -> chex.Array:
     """Reset the position of the agent."""
-    train_pos = jax.random.choice(rng, train_indices)
-    test_pos = jax.random.choice(rng, test_indices)
+    rng, rng_train, rng_test = jax.random.split(rng, 3)
+    train_pos = jax.random.choice(rng_train, train_indices)
+    test_pos = jax.random.choice(rng_test, test_indices)
     pos_index = jax.lax.select(training == 1, train_pos, test_pos)
-    collision = jnp.logical_and(train_pos[0] == goal[0], test_pos[0] == goal[1])
-    pos_index = jax.lax.select(collision, goal, pos_index)
+    collision = jnp.logical_and(pos_index[0] == goal[0], pos_index[1] == goal[1])
+    pos_index = jax.lax.select(collision, goal - 1, pos_index)
     return pos_index
+
+    # pos_index = jax.random.randint(rng, (), 0, coords.shape[0] - 1)
+    # collision = jnp.logical_and(
+    #     coords[pos_index][0] == goal[0], coords[pos_index][1] == goal[1]
+    # )
+    # pos_index = jax.lax.select(collision, coords.shape[0] - 1, pos_index)
+    # return coords[pos_index][:]

@@ -94,7 +94,7 @@ if __name__ == "__main__":
         help="Path to configuration yaml.",
     )
     parser.add_argument(
-        "-seed", "--seed_id", type=int, default=0, help="Random seed of experiment.",
+        "-seed", "--seed_id", type=int, default=100, help="Random seed of experiment.",
     )
     parser.add_argument(
         "-lr", "--lrate", type=float, default=5e-04, help="learning rate of PPO agent",

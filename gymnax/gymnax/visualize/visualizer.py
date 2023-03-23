@@ -248,7 +248,8 @@ if __name__ == "__main__":
 
     state_seq, reward_seq = [], []
     rng, rng_reset = jax.random.split(rng)
-    obs, env_state = env.reset(rng_reset, env_params, training=1)
+    training = 0
+    obs, env_state = env.reset(rng_reset, training, env_params,)
     while True:
         state_seq.append(env_state)
         rng, rng_act, rng_step = jax.random.split(rng, 3)

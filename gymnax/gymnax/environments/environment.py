@@ -47,13 +47,13 @@ class Environment(object):
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(
-        self, key: chex.PRNGKey, training: int = 1, params: Optional[EnvParams] = None,
+        self, key: chex.PRNGKey, params: Optional[EnvParams] = None, training: int = 1,
     ) -> Tuple[chex.Array, EnvState]:
         """Performs resetting of environment."""
         # Use default env parameters if no others specified
         if params is None:
             params = self.default_params
-        obs, state = self.reset_env(key, training, params)
+        obs, state = self.reset_env(key, params, training,)
         return obs, state
 
     def step_env(

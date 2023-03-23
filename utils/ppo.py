@@ -135,6 +135,8 @@ class RolloutManager(object):
 
     @partial(jax.jit, static_argnums=0)
     def batch_reset(self, keys, training):
+        jax.debug.print("training {}", training)
+        jax.debug.print("keys shape {}", keys.shape)
         return jax.vmap(self.env.reset, in_axes=(0, 0, None))(
             keys, jnp.array([training] * keys.shape[0]), self.env_params
         )
@@ -313,16 +315,16 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
 
         if (step + 1) % config.evaluate_every_epochs == 0:
             rng, rng_eval = jax.random.split(rng)
+            # rewards_test = rollout_manager.batch_evaluate(
+            #     rng_eval, train_state, config.num_test_rollouts, counts, training=0
+            # )
             rewards_train = rollout_manager.batch_evaluate(
                 rng_eval, train_state, config.num_test_rollouts, counts, training=1
-            )
-            rewards_test = rollout_manager.batch_evaluate(
-                rng_eval, train_state, config.num_test_rollouts, counts, training=0
             )
 
             log_steps.append(total_steps)
             log_return_train.append(rewards_train)
-            log_return_test.append(rewards_test)
+            # log_return_test.append(rewards_test)
             t.set_description(f"R: {str(rewards_train)}")
             t.refresh()
             log_value_predictions(
@@ -341,7 +343,7 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
     return (
         log_steps,
         log_return_train,
-        log_return_test,
+        # log_return_test,
         train_state.params,
     )
 
