@@ -40,19 +40,34 @@ def main(
         raise ValueError("Unknown train_type. Has to be in ('ES', 'PPO').")
 
     # Log and store the results.
-    log_steps, log_return_train, log_return_test, network_ckpt = train_fn(
-        rng, config, model, params, mle_log, use_wandb
-    )
+    (
+        log_steps,
+        log_return_train,
+        log_return_test,
+        log_td_error_train,
+        log_td_error_test,
+        log_mean_novelty_train,
+        log_mean_novelty_test,
+        network_ckpt,
+    ) = train_fn(rng, config, model, params, mle_log, use_wandb)
 
     if use_wandb:
         log_return_train = [np.array(i) for i in log_return_train]
         log_return_test = [np.array(i) for i in log_return_test]
+        log_td_error_train = [np.array(i) for i in log_td_error_train]
+        log_td_error_test = [np.array(i) for i in log_td_error_test]
+        log_mean_novelty_train = [np.array(i) for i in log_mean_novelty_train]
+        log_mean_novelty_test = [np.array(i) for i in log_mean_novelty_test]
         for i in range(len(log_return_train)):
             wandb.log(
                 {
                     "steps": log_steps[i],
                     "return_train": log_return_train[i],
                     "test_return": log_return_test[i],
+                    "td_error_train": log_td_error_train[i],
+                    "td_error_test": log_td_error_test[i],
+                    "novelty_train": log_mean_novelty_train[i],
+                    "novelty_test": log_mean_novelty_test[i],
                 }
             )
         wandb.log({"total_return_train": np.sum(log_return_train)})
@@ -102,7 +117,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scale",
         type=float,
-        default=10,
+        default=10000,
         help="Scale of the frequency in the SIREN network",
     )
     parser.add_argument(
@@ -116,13 +131,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--high_freq_multiplier",
         type=float,
-        default=1,
+        default=1000,
         help="Multiplier for the high frequency in the SIREN network",
     )
     parser.add_argument(
         "--count_switch",
         type=int,
-        default=1,
+        default=10000000,
         help="Number of steps before switching to high frequency",
     )
 

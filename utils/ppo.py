@@ -3,14 +3,16 @@ from functools import partial
 from typing import Any, Callable, Tuple
 
 import flax
-import gymnax
 import jax
 import jax.numpy as jnp
 import numpy as np
 import optax
 import tqdm
 from flax.training.train_state import TrainState
-import wandb
+
+from .batch_manager import BatchManager
+from .logging import log_counts, log_error_vs_counts, log_value_predictions
+from .rollout_manager import RolloutManager
 
 STR_TO_JAX_ARR = {
     "high": jnp.array([1, 0, 0]),
@@ -19,189 +21,10 @@ STR_TO_JAX_ARR = {
 }
 
 
-class BatchManager:
-    def __init__(
-        self,
-        discount: float,
-        gae_lambda: float,
-        n_steps: int,
-        num_envs: int,
-        action_size,
-        state_space,
-    ):
-        self.num_envs = num_envs
-        self.action_size = action_size
-        self.buffer_size = num_envs * n_steps
-        self.num_envs = num_envs
-        self.n_steps = n_steps
-        self.discount = discount
-        self.gae_lambda = gae_lambda
-
-        try:
-            temp = state_space.shape[0]
-            self.state_shape = state_space.shape
-        except Exception:
-            self.state_shape = [state_space]
-        self.reset()
-
-    @partial(jax.jit, static_argnums=0)
-    def reset(self):
-        return {
-            "states": jnp.empty(
-                (self.n_steps, self.num_envs, *self.state_shape), dtype=jnp.float32,
-            ),
-            "actions": jnp.empty((self.n_steps, self.num_envs, *self.action_size),),
-            "rewards": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
-            "dones": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.uint8),
-            "log_pis_old": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
-            "values_old": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
-            "_p": 0,
-        }
-
-    @partial(jax.jit, static_argnums=0)
-    def append(self, buffer, state, action, reward, done, log_pi, value):
-        return {
-            "states": buffer["states"].at[buffer["_p"]].set(state),
-            "actions": buffer["actions"].at[buffer["_p"]].set(action),
-            "rewards": buffer["rewards"].at[buffer["_p"]].set(reward.squeeze()),
-            "dones": buffer["dones"].at[buffer["_p"]].set(done.squeeze()),
-            "log_pis_old": buffer["log_pis_old"].at[buffer["_p"]].set(log_pi),
-            "values_old": buffer["values_old"].at[buffer["_p"]].set(value),
-            "_p": (buffer["_p"] + 1) % self.n_steps,
-        }
-
-    @partial(jax.jit, static_argnums=0)
-    def get(self, buffer):
-        gae, target = self.calculate_gae(
-            value=buffer["values_old"], reward=buffer["rewards"], done=buffer["dones"],
-        )
-        batch = (
-            buffer["states"][:-1],
-            buffer["actions"][:-1],
-            buffer["log_pis_old"][:-1],
-            buffer["values_old"][:-1],
-            target,
-            gae,
-        )
-        return batch
-
-    @partial(jax.jit, static_argnums=0)
-    def calculate_gae(
-        self, value: jnp.ndarray, reward: jnp.ndarray, done: jnp.ndarray
-    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        advantages = []
-        gae = 0.0
-        for t in reversed(range(len(reward) - 1)):
-            value_diff = self.discount * value[t + 1] * (1 - done[t]) - value[t]
-            delta = reward[t] + value_diff
-            gae = delta + self.discount * self.gae_lambda * (1 - done[t]) * gae
-            advantages.append(gae)
-        advantages = advantages[::-1]
-        advantages = jnp.array(advantages)
-        return advantages, advantages + value[:-1]
-
-
-class RolloutManager(object):
-    def __init__(self, model, env_name, env_kwargs, env_params):
-        # Setup functionalities for vectorized batch rollout
-        self.env_name = env_name
-        self.env, self.env_params = gymnax.make(env_name, **env_kwargs)
-        self.env_params = self.env_params.replace(**env_params)
-        self.observation_space = self.env.observation_space(self.env_params)
-        self.action_size = self.env.action_space(self.env_params).shape
-        self.apply_fn = model.apply
-        self.select_action = self.select_action_ppo
-
-    @partial(jax.jit, static_argnums=0)
-    def select_action_ppo(
-        self,
-        train_state: TrainState,
-        obs: jnp.ndarray,
-        counts: jnp.ndarray,
-        low_mixed_or_high: jnp.ndarray,
-        rng: jax.random.PRNGKey,
-    ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jax.random.PRNGKey]:
-        value, pi = policy(
-            train_state.apply_fn,
-            train_state.params,
-            obs,
-            counts,
-            low_mixed_or_high,
-            rng,
-        )
-        action = pi.sample(seed=rng)
-        log_prob = pi.log_prob(action)
-        return action, log_prob, value[:, 0], rng
-
-    @partial(jax.jit, static_argnums=0)
-    def batch_reset(self, keys, training):
-        jax.debug.print("training {}", training)
-        jax.debug.print("keys shape {}", keys.shape)
-        return jax.vmap(self.env.reset, in_axes=(0, 0, None))(
-            keys, jnp.array([training] * keys.shape[0]), self.env_params
-        )
-
-    @partial(jax.jit, static_argnums=0)
-    def batch_step(self, keys, state, action):
-        return jax.vmap(self.env.step, in_axes=(0, 0, 0, None))(
-            keys, state, action, self.env_params
-        )
-
-    @partial(jax.jit, static_argnums=(0, 3))
-    def batch_evaluate(self, rng_input, train_state, num_envs, counts, training):
-        """Rollout an episode with lax.scan."""
-        # Reset the environment
-        rng_reset, rng_episode = jax.random.split(rng_input)
-        obs, state = self.batch_reset(jax.random.split(rng_reset, num_envs), training)
-
-        def policy_step(state_input, _):
-            """lax.scan compatible step transition in jax env."""
-            obs, state, train_state, rng, cum_reward, valid_mask = state_input
-            rng, rng_step, rng_net = jax.random.split(rng, 3)
-            action, _, _, rng = self.select_action(
-                train_state, obs, counts, STR_TO_JAX_ARR["mixed"], rng_net
-            )
-            next_o, next_s, reward, done, _ = self.batch_step(
-                jax.random.split(rng_step, num_envs), state, action.squeeze(),
-            )
-            new_cum_reward = cum_reward + reward * valid_mask
-            new_valid_mask = valid_mask * (1 - done)
-            carry, y = (
-                [next_o, next_s, train_state, rng, new_cum_reward, new_valid_mask,],
-                [new_valid_mask],
-            )
-            return carry, y
-
-        # Scan over episode step loop
-        carry_out, scan_out = jax.lax.scan(
-            policy_step,
-            [
-                obs,
-                state,
-                train_state,
-                rng_episode,
-                jnp.array(num_envs * [0.0]),
-                jnp.array(num_envs * [1.0]),
-            ],
-            (),
-            self.env_params.max_steps_in_episode,
-        )
-
-        cum_return = carry_out[-2].squeeze()
-        return jnp.mean(cum_return)
-
-
-@partial(jax.jit, static_argnums=0)
-def policy(
-    apply_fn: Callable[..., Any],
-    params: flax.core.frozen_dict.FrozenDict,
-    obs: jnp.ndarray,
-    counts: jnp.ndarray,
-    low_mixed_or_high: jnp.ndarray,
-    rng,
-):
-    value, pi = apply_fn(params, obs, counts, low_mixed_or_high, rng)
-    return value, pi
+HIGH_FREQ_ERRORS = []
+LOW_FREQ_ERRORS = []
+HIGH_FREQ_COUNTS = []
+LOW_FREQ_COUNTS = []
 
 
 def update_counts(counts, obs):
@@ -282,7 +105,15 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
     )
 
     total_steps = 0
-    log_steps, log_return_train, log_return_test = [], [], []
+    (
+        log_steps,
+        log_return_train,
+        log_return_test,
+        log_td_error_train,
+        log_td_error_test,
+        log_mean_novelty_train,
+        log_mean_novelty_test,
+    ) = ([], [], [], [], [], [], [])
     t = tqdm.tqdm(range(1, num_total_epochs + 1), desc="PPO", leave=True)
     for step in t:
         train_state, obs, state, batch, new_values, rng_step = get_transition(
@@ -315,21 +146,53 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
 
         if (step + 1) % config.evaluate_every_epochs == 0:
             rng, rng_eval = jax.random.split(rng)
-            # rewards_test = rollout_manager.batch_evaluate(
-            #     rng_eval, train_state, config.num_test_rollouts, counts, training=0
-            # )
-            rewards_train = rollout_manager.batch_evaluate(
+            (
+                rewards_test,
+                td_error_test,
+                mean_novelty_test,
+            ) = rollout_manager.batch_evaluate(
+                rng_eval, train_state, config.num_test_rollouts, counts, training=0
+            )
+            (
+                rewards_train,
+                td_error_train,
+                mean_novelty_train,
+            ) = rollout_manager.batch_evaluate(
                 rng_eval, train_state, config.num_test_rollouts, counts, training=1
             )
 
             log_steps.append(total_steps)
             log_return_train.append(rewards_train)
-            # log_return_test.append(rewards_test)
+            log_return_test.append(rewards_test)
+            log_td_error_train.append(td_error_train)
+            log_td_error_test.append(td_error_test)
+            log_mean_novelty_train.append(mean_novelty_train)
+            log_mean_novelty_test.append(mean_novelty_test)
             t.set_description(f"R: {str(rewards_train)}")
             t.refresh()
             log_value_predictions(
-                use_wandb, model, train_state, rollout_manager, rng, counts
+                use_wandb,
+                model,
+                train_state,
+                rollout_manager,
+                rng,
+                counts,
+                STR_TO_JAX_ARR,
             )
+
+            log_error_vs_counts(
+                freq_counts=HIGH_FREQ_COUNTS,
+                freq_errors=HIGH_FREQ_ERRORS,
+                log_str="high",
+                use_wandb=use_wandb,
+            )
+            log_error_vs_counts(
+                freq_counts=LOW_FREQ_COUNTS,
+                freq_errors=LOW_FREQ_ERRORS,
+                log_str="low",
+                use_wandb=use_wandb,
+            )
+            log_counts(counts=counts, use_wandb=use_wandb)
 
             model.apply(train_state.params, obs, counts, STR_TO_JAX_ARR["mixed"], rng)
             if mle_log is not None:
@@ -343,50 +206,13 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
     return (
         log_steps,
         log_return_train,
-        # log_return_test,
+        log_return_test,
+        log_td_error_train,
+        log_td_error_test,
+        log_mean_novelty_train,
+        log_mean_novelty_test,
         train_state.params,
     )
-
-
-def log_value_predictions(
-    use_wandb: bool, model, train_state, rollout_manager, rng, counts: np.ndarray,
-) -> None:
-    for key in STR_TO_JAX_ARR.keys():
-        values = np.zeros((13, 13))
-        preds = model.apply(
-            train_state.params,
-            rollout_manager.env.coords,
-            counts,
-            STR_TO_JAX_ARR[key],
-            rng,
-        )
-        all_coordinates = [
-            [np.array(i)[0], np.array(i)[1]] for i in rollout_manager.env.coords
-        ]
-        for index, val in enumerate(all_coordinates):
-            i, j = val[0], val[1]
-            values[i, j] = np.array(preds[0][index])
-
-        if use_wandb:
-            import plotly.graph_objects as go
-
-            fig = go.Figure(
-                data=go.Heatmap(
-                    z=values,
-                    x=np.arange(0, 13),
-                    y=np.arange(0, 13),
-                    colorscale="Viridis",
-                )
-            )
-            wandb.log({f"value_predictions_{key}": fig})
-
-    if use_wandb:
-        fig = go.Figure(
-            data=go.Heatmap(
-                z=counts, x=np.arange(0, 13), y=np.arange(0, 13), colorscale="Viridis",
-            )
-        )
-        wandb.log({"counts": fig})
 
 
 @jax.jit
@@ -436,7 +262,15 @@ def loss_actor_and_critic(
 
     return (
         total_loss,
-        (value_loss, loss_actor, entropy, value_pred.mean(), target.mean(), gae_mean,),
+        (
+            value_loss,
+            loss_actor,
+            entropy,
+            value_pred.mean(),
+            target.mean(),
+            gae_mean,
+            (value_pred - value_old) / value_pred,
+        ),
     )
 
 
@@ -485,9 +319,28 @@ def update(
 
         (
             total_loss,
-            (value_loss, loss_actor, entropy, value_pred, target_val, gae_val,),
+            (
+                value_loss,
+                loss_actor,
+                entropy,
+                value_pred,
+                target_val,
+                gae_val,
+                value_error,
+            ),
         ) = total_loss
 
+        global HIGH_FREQ_COUNTS
+        global HIGH_FREQ_ERRORS
+        global LOW_FREQ_COUNTS
+        global LOW_FREQ_ERRORS
+
+        obs_to_index = obs.reshape(obs.shape[0] * obs.shape[1], -1)
+        counts_to_log = counts[
+            obs_to_index[:, :2].astype(int)[:, 0], obs_to_index[:, :2].astype(int)[:, 1]
+        ]
+        LOW_FREQ_ERRORS = np.abs(np.asarray(value_error))
+        LOW_FREQ_COUNTS = np.asarray(counts_to_log)
         avg_metrics_dict["total_loss"] += np.asarray(total_loss)
         avg_metrics_dict["value_loss"] += np.asarray(value_loss)
         avg_metrics_dict["actor_loss"] += np.asarray(loss_actor)
@@ -514,9 +367,23 @@ def update(
 
         (
             total_loss,
-            (value_loss, loss_actor, entropy, value_pred, target_val, gae_val,),
+            (
+                value_loss,
+                loss_actor,
+                entropy,
+                value_pred,
+                target_val,
+                gae_val,
+                value_error,
+            ),
         ) = total_loss
 
+        obs_to_index = obs.reshape(obs.shape[0] * obs.shape[1], -1)
+        counts_to_log = counts[
+            obs_to_index[:, :2].astype(int)[:, 0], obs_to_index[:, :2].astype(int)[:, 1]
+        ]
+        HIGH_FREQ_ERRORS = np.abs(np.asarray(value_error))
+        HIGH_FREQ_COUNTS = np.asarray(counts_to_log)
         avg_metrics_dict["total_loss"] += np.asarray(total_loss)
         avg_metrics_dict["value_loss"] += np.asarray(value_loss)
         avg_metrics_dict["actor_loss"] += np.asarray(loss_actor)
