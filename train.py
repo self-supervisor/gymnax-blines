@@ -117,7 +117,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scale",
         type=float,
-        default=10000,
+        default=10,
         help="Scale of the frequency in the SIREN network",
     )
     parser.add_argument(

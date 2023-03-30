@@ -306,7 +306,13 @@ class CategoricalSeparateMLP(nn.Module):
         # return v, pi
 
         x_a = nn.relu(nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x))
-        # Loop over rest of intermediate hidden layers
+        # x_a = LFF(
+        #     num_output_features=self.num_hidden_units,
+        #     num_input_features=x.shape[-1],
+        #     name=self.prefix_critic + "_fc_1_action",
+        #     scale=self.scale,
+        # )(x)
+        # # Loop over rest of intermediate hidden layers
         for i in range(1, self.num_hidden_layers):
             x_a = nn.relu(
                 nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x_a)
