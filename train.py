@@ -6,6 +6,36 @@ import wandb
 import numpy as np
 from distutils.util import strtobool
 
+train_four_rooms_map = """
+xxxxxxxxxxxxx
+x     x     x
+x     x     x
+x           x
+x     x     x
+x     x     x
+xx xxxx     x
+x     xxx xxx
+x     x     x
+x     x     x
+x           x
+x     x     x
+xxxxxxxxxxxxx"""
+
+test_four_rooms_map = """
+xxxxxxxxxxxxx
+x     x     x
+x     x     x
+x           x
+x     x     x
+x     x     x
+xx xxxx     x
+x     xxx xxx
+x     x     x
+x     x     x
+x           x
+x     x     x
+xxxxxxxxxxxxx"""
+
 
 def main(
     config,
@@ -117,13 +147,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scale",
         type=float,
-        default=10,
+        default=5,
         help="Scale of the frequency in the SIREN network",
     )
     parser.add_argument(
         "--wandb",
         type=lambda x: bool(strtobool(x)),
-        default=True,
+        default=False,
         nargs="?",
         const=True,
         help="whether to log with wandb",
@@ -137,7 +167,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--count_switch",
         type=int,
-        default=10000000,
+        default=500,
         help="Number of steps before switching to high frequency",
     )
 

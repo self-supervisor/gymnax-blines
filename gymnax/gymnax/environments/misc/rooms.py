@@ -51,48 +51,35 @@ x     x     x
 x           x
 x     x     x
 xxxxxxxxxxxxx"""
-# xxxxxxxxxxxxx
-# xxxxxxxxxxxxx
-# xxxxxxxxxxxxx
-# xxxxxxxxxxxxx
-# xxxxxxxxxxxxx
-# xxxxxxxxxxxxx
-# xxxxxxxxxxxxx
-# xxxxxxxxxxxxx
-# xxxxxxxxxxxxx
-# xxxxxxxxxxxxx
-# xxxxxxxxx xxx
-# xxxxxxxxxxxxx
-# xxxxxxxxxxxxx"""
 
 test_four_rooms_map = """
 xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xx xxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
+x     x     x
+x     x     x
+x           x
+x     x     x
+x     x     x
+xx xxxx     x
+x     xxx xxx
+x     x     x
+x     x     x
+x           x
+x     x     x
 xxxxxxxxxxxxx"""
 
 goal_four_rooms_map = """
 xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxx xxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
-xxxxxxxxxxxxx
+x     x     x
+x     x     x
+x           x
+x     x     x
+x     x     x
+xx xxxx     x
+x     xxx xxx
+x     x     x
+x     x     x
+x           x
+x     x     x
 xxxxxxxxxxxxx"""
 
 
@@ -113,14 +100,18 @@ class FourRooms(environment.Environment):
 
     def __init__(
         self,
+        train_map=None,
+        test_map=None,
         use_visual_obs: bool = False,
         goal_fixed: List[int] = [1, 11],
         pos_fixed: List[int] = [4, 1],
     ):
         super().__init__()
         self.env_map = string_to_bool_map(four_rooms_map)
-        self.train_map = string_to_bool_map(train_four_rooms_map)
-        self.test_map = string_to_bool_map(test_four_rooms_map)
+        if train_map == None:
+            self.train_map = string_to_bool_map(train_four_rooms_map)
+        if test_map == None:
+            self.test_map = string_to_bool_map(test_four_rooms_map)
         self.goal_map = string_to_bool_map(goal_four_rooms_map)
         self.occupied_map = 1 - self.env_map
         coords = []
