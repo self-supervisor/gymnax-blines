@@ -41,7 +41,7 @@ def update_values(values, obs, new_values):
     return values
 
 
-def train_ppo(rng, config, model, params, mle_log, use_wandb):
+def train_ppo(rng, config, model, params, mle_log, use_wandb, train_state=None):
     """Training loop for PPO based on https://github.com/bmazoure/ppo_jax."""
     counts = np.zeros((13, 13))
     values = np.zeros((13, 13))
@@ -59,10 +59,16 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
         optax.scale_by_schedule(schedule_fn),
     )
 
-    train_state = TrainState.create(apply_fn=model.apply, params=params, tx=tx,)
+    if train_state == None:
+        train_state = TrainState.create(apply_fn=model.apply, params=params, tx=tx,)
     # Setup the rollout manager -> Collects data in vmapped-fashion over envs
     rollout_manager = RolloutManager(
-        model, config.env_name, config.env_kwargs, config.env_params
+        model,
+        config.env_name,
+        config.env_kwargs,
+        config.env_params,
+        config.map_params,
+        config.map_all_locations,
     )
 
     batch_manager = BatchManager(
@@ -212,6 +218,7 @@ def train_ppo(rng, config, model, params, mle_log, use_wandb):
         log_mean_novelty_train,
         log_mean_novelty_test,
         train_state.params,
+        train_state,
     )
 
 

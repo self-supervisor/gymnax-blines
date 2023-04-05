@@ -5,22 +5,29 @@ metric:
 parameters:
   count_switch:
     values:
-      - 1
-      - 50
-      - 100
       - 500
-      - 1000
-      - 1500
-      - 2000
 
   scale:
     values:
-      - 5
+      - 0.001
+      - 0.01
+      - 0.1
+      - 1
+      - 10
+      - 100
+  
+  high_freq_multiplier:
+    values:
+      - 1
+      - 10
+      - 100
+      - 1000
+      - 10000
+      - 100000
+
   seed:
     values:
       - 1
       - 2
       - 3
-      - 4
-      - 5
 program: train.py

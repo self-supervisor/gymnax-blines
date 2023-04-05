@@ -102,16 +102,25 @@ class FourRooms(environment.Environment):
         self,
         train_map=None,
         test_map=None,
+        map_all_locations=None,
         use_visual_obs: bool = False,
         goal_fixed: List[int] = [1, 11],
         pos_fixed: List[int] = [4, 1],
     ):
         super().__init__()
-        self.env_map = string_to_bool_map(four_rooms_map)
+        if map_all_locations == None:
+            self.env_map = string_to_bool_map(four_rooms_map)
+        else:
+            self.env_map = string_to_bool_map(map_all_locations)
         if train_map == None:
             self.train_map = string_to_bool_map(train_four_rooms_map)
+        else:
+            self.train_map = string_to_bool_map(train_map)
         if test_map == None:
             self.test_map = string_to_bool_map(test_four_rooms_map)
+        else:
+            self.test_map = string_to_bool_map(test_map)
+
         self.goal_map = string_to_bool_map(goal_four_rooms_map)
         self.occupied_map = 1 - self.env_map
         coords = []

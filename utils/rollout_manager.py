@@ -28,10 +28,18 @@ def policy(
 
 
 class RolloutManager(object):
-    def __init__(self, model, env_name, env_kwargs, env_params):
+    def __init__(
+        self, model, env_name, env_kwargs, env_params, map_params, map_all_locations
+    ):
         # Setup functionalities for vectorized batch rollout
         self.env_name = env_name
-        self.env, self.env_params = gymnax.make(env_name, **env_kwargs)
+        self.env, self.env_params = gymnax.make(
+            env_name,
+            train_map=map_params,
+            test_map=map_params,
+            map_all_locations=map_all_locations,
+            **env_kwargs
+        )
         self.env_params = self.env_params.replace(**env_params)
         self.observation_space = self.env.observation_space(self.env_params)
         self.action_size = self.env.action_space(self.env_params).shape

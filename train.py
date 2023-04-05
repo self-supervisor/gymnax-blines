@@ -8,12 +8,42 @@ from distutils.util import strtobool
 
 train_four_rooms_map = """
 xxxxxxxxxxxxx
-x     x     x
+xxxxxxx     x
+xxxxxxx     x
+xxxxxxx     x
+xxxxxxx     x
+xxxxxxx     x
+xxxxxxx     x
+x     xxx xxx
 x     x     x
 x           x
 x     x     x
 x     x     x
-xx xxxx     x
+xxxxxxxxxxxxx"""
+
+test_four_rooms_map = """
+xxxxxxxxxxxxx
+x     xxxxxxx
+x     xxxxxxx
+x     xxxxxxx
+x     xxxxxxx
+x     xxxxxxx
+xxxxxxxxxxxxx
+xxxxxxxxxxxxx
+xxxxxxxxxxxxx
+xxxxxxxxxxxxx
+xxxxxxxxxxxxx
+xxxxxxxxxxxxx
+xxxxxxxxxxxxx"""
+
+map_all_locations_train = """
+xxxxxxxxxxxxx
+xxxxxxx     x
+xxxxxxx     x
+xxxxxxx     x
+xxxxxxx     x
+xxxxxxx     x
+xxxxxxx     x
 x     xxx xxx
 x     x     x
 x     x     x
@@ -21,7 +51,7 @@ x           x
 x     x     x
 xxxxxxxxxxxxx"""
 
-test_four_rooms_map = """
+map_all_locations_test = """
 xxxxxxxxxxxxx
 x     x     x
 x     x     x
@@ -69,6 +99,8 @@ def main(
     else:
         raise ValueError("Unknown train_type. Has to be in ('ES', 'PPO').")
 
+    config["map_params"] = train_four_rooms_map
+    config["map_all_locations"] = map_all_locations_train
     # Log and store the results.
     (
         log_steps,
@@ -79,7 +111,47 @@ def main(
         log_mean_novelty_train,
         log_mean_novelty_test,
         network_ckpt,
+        train_state,
     ) = train_fn(rng, config, model, params, mle_log, use_wandb)
+
+    # if use_wandb:
+    #     log_return_train = [np.array(i) for i in log_return_train]
+    #     log_return_test = [np.array(i) for i in log_return_test]
+    #     log_td_error_train = [np.array(i) for i in log_td_error_train]
+    #     log_td_error_test = [np.array(i) for i in log_td_error_test]
+    #     log_mean_novelty_train = [np.array(i) for i in log_mean_novelty_train]
+    #     log_mean_novelty_test = [np.array(i) for i in log_mean_novelty_test]
+    #     for i in range(len(log_return_train)):
+    #         wandb.log(
+    #             {
+    #                 "steps": log_steps[i],
+    #                 "return_train": log_return_train[i],
+    #                 "test_return": log_return_test[i],
+    #                 "td_error_train": log_td_error_train[i],
+    #                 "td_error_test": log_td_error_test[i],
+    #                 "novelty_train": log_mean_novelty_train[i],
+    #                 "novelty_test": log_mean_novelty_test[i],
+    #             }
+    #         )
+    #     wandb.log({"total_return_train": np.sum(log_return_train)})
+    #     wandb.log({"total_return_train": np.sum(log_return_test)})
+
+    config["map_params"] = test_four_rooms_map
+    config["map_all_locations"] = map_all_locations_test
+    # config["num_train_steps"] = 3
+    # Log and store the results.
+    # model = jax.checkpoint.restore(network_ckpt)
+    (
+        log_steps,
+        log_return_train,
+        log_return_test,
+        log_td_error_train,
+        log_td_error_test,
+        log_mean_novelty_train,
+        log_mean_novelty_test,
+        network_ckpt,
+        _,
+    ) = train_fn(rng, config, model, params, mle_log, use_wandb, train_state)
 
     if use_wandb:
         log_return_train = [np.array(i) for i in log_return_train]
@@ -102,6 +174,7 @@ def main(
             )
         wandb.log({"total_return_train": np.sum(log_return_train)})
         wandb.log({"total_return_train": np.sum(log_return_test)})
+
     data_to_store = {
         "log_steps": log_steps,
         "log_return_train": log_return_train,
@@ -153,7 +226,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--wandb",
         type=lambda x: bool(strtobool(x)),
-        default=False,
+        default=True,
         nargs="?",
         const=True,
         help="whether to log with wandb",

@@ -305,18 +305,24 @@ class CategoricalSeparateMLP(nn.Module):
         # pi = tfp.distributions.Categorical(logits=logits)
         # return v, pi
 
-        x_a = nn.relu(nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x))
-        # x_a = LFF(
-        #     num_output_features=self.num_hidden_units,
-        #     num_input_features=x.shape[-1],
-        #     name=self.prefix_critic + "_fc_1_action",
-        #     scale=self.scale,
-        # )(x)
+        # x_a = nn.relu(nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x))
+        x_a = LFF(
+            num_output_features=self.num_hidden_units,
+            num_input_features=x.shape[-1],
+            name=self.prefix_critic + "_fc_1_action",
+            scale=self.scale,
+        )(x)
         # # Loop over rest of intermediate hidden layers
         for i in range(1, self.num_hidden_layers):
-            x_a = nn.relu(
-                nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x_a)
-            )
+            x_a = LFF(
+                num_output_features=self.num_hidden_units,
+                num_input_features=x.shape[-1],
+                name=self.prefix_critic + f"_fc_{i+1}_action",
+                scale=self.scale,
+            )(x)
+            # x_a = nn.relu(
+            #     nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x_a)
+            # )
         logits = nn.Dense(self.num_output_units, bias_init=default_mlp_init(),)(x_a)
         # pi = distrax.Categorical(logits=logits)
         pi = tfp.distributions.Categorical(logits=logits)

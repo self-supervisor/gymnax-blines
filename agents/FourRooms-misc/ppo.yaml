@@ -1,6 +1,6 @@
 train_config:
   train_type: "PPO"
-  num_train_steps: 320000
+  num_train_steps: 50000
   evaluate_every_epochs: 250
 
   env_name: "FourRooms-misc"
@@ -8,7 +8,7 @@ train_config:
     use_visual_obs: false
   env_params:
     resample_init_pos: true
-    resample_goal_pos: true
+    resample_goal_pos: false
   num_test_rollouts: 164
   
   num_train_envs: 16  # Number of parallel env workers
