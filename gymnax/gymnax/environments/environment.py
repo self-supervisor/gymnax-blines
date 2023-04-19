@@ -29,7 +29,7 @@ class Environment(object):
         state: EnvState,
         action: Union[int, float],
         params: Optional[EnvParams] = None,
-        training: int = 1,
+        # training: int = 1,
     ) -> Tuple[chex.Array, EnvState, float, bool, dict]:
         """Performs step transitions in the environment."""
         # Use default env parameters if no others specified
@@ -37,7 +37,7 @@ class Environment(object):
             params = self.default_params
         key, key_reset = jax.random.split(key)
         obs_st, state_st, reward, done, info = self.step_env(key, state, action, params)
-        obs_re, state_re = self.reset_env(key_reset, training, params)
+        obs_re, state_re = self.reset_env(key_reset, params)
         # Auto-reset environment based on termination
         state = jax.tree_map(
             lambda x, y: jax.lax.select(done, x, y), state_re, state_st
@@ -47,13 +47,13 @@ class Environment(object):
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(
-        self, key: chex.PRNGKey, params: Optional[EnvParams] = None, training: int = 1,
+        self, key: chex.PRNGKey, params: Optional[EnvParams] = None,
     ) -> Tuple[chex.Array, EnvState]:
         """Performs resetting of environment."""
         # Use default env parameters if no others specified
         if params is None:
             params = self.default_params
-        obs, state = self.reset_env(key, params, training,)
+        obs, state = self.reset_env(key, params,)
         return obs, state
 
     def step_env(
@@ -67,7 +67,7 @@ class Environment(object):
         raise NotImplementedError
 
     def reset_env(
-        self, key: chex.PRNGKey, params: EnvParams, training: int
+        self, key: chex.PRNGKey, params: EnvParams
     ) -> Tuple[chex.Array, EnvState]:
         """Environment-specific reset."""
         raise NotImplementedError

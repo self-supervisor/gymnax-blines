@@ -33,9 +33,12 @@ class BatchManager:
     def reset(self):
         return {
             "states": jnp.empty(
-                (self.n_steps, self.num_envs, *self.state_shape), dtype=jnp.float32,
+                (self.n_steps, self.num_envs, *self.state_shape),
+                dtype=jnp.float32,
             ),
-            "actions": jnp.empty((self.n_steps, self.num_envs, *self.action_size),),
+            "actions": jnp.empty(
+                (self.n_steps, self.num_envs, *self.action_size),
+            ),
             "rewards": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
             "dones": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.uint8),
             "log_pis_old": jnp.empty((self.n_steps, self.num_envs), dtype=jnp.float32),
@@ -58,7 +61,9 @@ class BatchManager:
     @partial(jax.jit, static_argnums=0)
     def get(self, buffer):
         gae, target = self.calculate_gae(
-            value=buffer["values_old"], reward=buffer["rewards"], done=buffer["dones"],
+            value=buffer["values_old"],
+            reward=buffer["rewards"],
+            done=buffer["dones"],
         )
         batch = (
             buffer["states"][:-1],

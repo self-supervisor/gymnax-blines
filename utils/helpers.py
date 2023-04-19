@@ -40,6 +40,13 @@ def load_config(config_fname, seed_id=0, lrate=None):
     return DotMap(config)
 
 
+def get_perfect_params_from_pickle(filepath):
+    import pandas as pd
+
+    obj = pd.read_pickle(filepath)
+    return obj["network"]
+
+
 def save_pkl_object(obj, filename):
     """Helper to store pickle objects."""
     import pickle

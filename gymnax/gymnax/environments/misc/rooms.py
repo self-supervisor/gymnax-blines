@@ -169,7 +169,6 @@ class FourRooms(environment.Environment):
     ) -> Tuple[chex.Array, EnvState, float, bool, dict]:
         """Perform single timestep state transition."""
         key_random, key_action = jax.random.split(key)
-        # Sample whether to choose a random action
         choose_random = jax.random.uniform(key_random, ()) < params.fail_prob * 4 / 3
         action = jax.lax.select(
             choose_random, self.action_space(params).sample(key_action), action
@@ -178,15 +177,11 @@ class FourRooms(environment.Environment):
         p = state.pos + self.directions[action]
         in_map = self.env_map[p[0], p[1]]
         new_pos = jax.lax.select(in_map, p, state.pos)
-        in_lava = self.env_map[p[0], p[1]]  # self.env_map[new_pos[0], new_pos[1]]
         self.counts = self.counts.at[new_pos[0], new_pos[1]].add(1)
 
         reward = -0.1 + 10 * jnp.logical_and(
             new_pos[0] == state.goal[0], new_pos[1] == state.goal[1]
         )
-        # reward = -0.1 * self.counts[new_pos[0], new_pos[1]]
-
-        # Update state dict and evaluate termination conditions
         state = EnvState(new_pos, state.goal, state.time + 1)
         done = self.is_terminal(state, params)
         return (
@@ -201,10 +196,8 @@ class FourRooms(environment.Environment):
         self, key: chex.PRNGKey, training: int, params: EnvParams,
     ) -> Tuple[chex.Array, EnvState]:
         """Reset environment state by sampling initial position."""
-        # Reset both the agents position and the goal location
         rng_goal, rng_pos = jax.random.split(key, 2)
         goal_new = reset_goal(rng_goal, self.available_goals, params)
-        # Only use resampled position if specified in EnvParams
         goal = jax.lax.select(params.resample_goal_pos, goal_new, self.goal_fixed)
 
         pos_new = reset_pos(
@@ -229,15 +222,10 @@ class FourRooms(environment.Environment):
 
     def is_terminal(self, state: EnvState, params: EnvParams) -> bool:
         """Check whether state is terminal."""
-        # Check number of steps in episode termination condition
         done_steps = state.time >= params.max_steps_in_episode
-        # Check if agent has found the goal
         done_goal = jnp.logical_and(
             state.pos[0] == state.goal[0], state.pos[1] == state.goal[1],
         )
-        # done_not_dead = jnp.logical_or(done_goal, done_steps)
-        # in_map = self.env_map[state.pos[0], state.pos[1]]
-        # done_dead = jax.lax.select(in_map, True, False)
         done = jnp.logical_or(done_goal, done_steps)
         return done
 
@@ -326,8 +314,7 @@ def reset_pos(
 ) -> chex.Array:
     """Reset the position of the agent."""
     train_pos = jax.random.choice(rng, train_indices)
-    test_pos = jax.random.choice(rng, test_indices)
-    pos_index = jax.lax.select(training == 1, train_pos, test_pos)
-    collision = jnp.logical_and(train_pos[0] == goal[0], test_pos[0] == goal[1])
-    pos_index = jax.lax.select(collision, goal, pos_index)
+    # pos_index = jax.lax.select(training == 1, train_pos, test_pos)
+    collision = jnp.logical_and(train_pos[0] == goal[0], train_pos[1] == goal[1])
+    pos_index = jax.lax.select(collision, goal, train_pos)
     return pos_index

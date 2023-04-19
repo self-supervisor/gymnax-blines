@@ -1,8 +1,7 @@
 import jax
 import jax.numpy as jnp
 import tqdm
-from evosax import (ESLog, FitnessShaper, ParameterReshaper, ProblemMapper,
-                    Strategies)
+from evosax import ESLog, FitnessShaper, ParameterReshaper, ProblemMapper, Strategies
 
 
 def train_es(rng, config, model, params, mle_log):

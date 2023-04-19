@@ -1,7 +1,14 @@
 import gym
 import numpy as np
-from bsuite.environments import (bandit, catch, deep_sea, discounting_chain,
-                                 memory_chain, mnist, umbrella_chain)
+from bsuite.environments import (
+    bandit,
+    catch,
+    deep_sea,
+    discounting_chain,
+    memory_chain,
+    mnist,
+    umbrella_chain,
+)
 
 from utils.vec_env.parallel import DummyVecEnv, SubprocVecEnv
 
