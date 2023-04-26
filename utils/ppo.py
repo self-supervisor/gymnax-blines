@@ -16,6 +16,7 @@ from .logging import (
     log_value_predictions,
     log_frequency_stats,
     compute_difference_with_perfect_policy,
+    log_histograms,
 )
 from .rollout_manager import RolloutManager
 
@@ -54,6 +55,7 @@ def train_ppo(
     mle_log,
     use_wandb,
     perfect_network_params,
+    perfect_network,
     train_state=None,
 ):
     """Training loop for PPO based on https://github.com/bmazoure/ppo_jax."""
@@ -146,6 +148,7 @@ def train_ppo(
         # log_mean_counts,
     ) = ([], [], [], [], [], [], [], [], [], [], [], [], [])
     t = tqdm.tqdm(range(1, num_total_epochs + 1), desc="PPO", leave=True)
+
     for step in t:
         train_state, obs, state, batch, new_values, rng_step = get_transition(
             train_state,
@@ -159,7 +162,7 @@ def train_ppo(
         # update_counts(counts, obs)
         # update_values(values, obs, new_values)
         total_steps += config.num_train_envs
-        if step % (config.n_steps + 1) == 0:
+        if step % (config.n_steps + 1) == 0 and step > 1:
             metric_dict, train_state, rng_update = update(
                 train_state,
                 batch_manager.get(batch),
@@ -175,7 +178,7 @@ def train_ppo(
             )
             batch = batch_manager.reset()
 
-        if step % config.evaluate_every_epochs == 0:
+        if step % config.evaluate_every_epochs == 0 or step == 1:
             rng, rng_eval = jax.random.split(rng)
             # (
             #     rewards_test,
@@ -199,38 +202,35 @@ def train_ppo(
             # ) = rollout_manager.batch_evaluate(
             #     rng_eval, train_state, config.num_test_rollouts, counts, training=1
             # )
-            (
-                rewards_train,
-                td_error_train,
-                mean_novelty_train,
-            ) = rollout_manager.batch_evaluate(
+            rewards_train = rollout_manager.batch_evaluate(
                 rng_eval, train_state, config.num_test_rollouts  # , training=1
             )
 
             log_steps.append(total_steps)
             log_return_train.append(np.mean(rewards_train))
             # log_return_test.append(np.mean(rewards_test))
-            log_td_error_train.append(td_error_train)
-            log_td_error_test.append(td_error_test)
-            log_mean_novelty_train.append(mean_novelty_train)
-            log_mean_novelty_test.append(mean_novelty_test)
+            # log_td_error_train.append(td_error_train)
+            # log_td_error_test.append(td_error_test)
+            # log_mean_novelty_train.append(mean_novelty_train)
+            # log_mean_novelty_test.append(mean_novelty_test)
             t.set_description(f"R: {str(rewards_train)}")
             t.refresh()
-            # KL_div, MSE, mean_counts = compute_difference_with_perfect_policy(
-            #     training_state=train_state,
-            #     training_network=model,
-            #     perfect_network_params=perfect_network_params,
-            #     obs=obs,
-            #     counts=counts,
-            #     rng=rng_eval,
-            # )
             KL_div, MSE = compute_difference_with_perfect_policy(
                 training_state=train_state,
                 training_network=model,
                 perfect_network_params=perfect_network_params,
+                perfect_network=perfect_network,
                 obs=obs,
+                # counts=counts,
                 rng=rng_eval,
             )
+            # KL_div, MSE = compute_difference_with_perfect_policy(
+            #     training_state=train_state,
+            #     training_network=model,
+            #     perfect_network_params=perfect_network_params,
+            #     obs=obs,
+            #     rng=rng_eval,
+            # )
             log_kl_div.append(KL_div)
             log_mse.append(MSE)
             # log_mean_counts.append(mean_counts)
@@ -244,9 +244,9 @@ def train_ppo(
             #     STR_TO_JAX_ARR,
             # )
 
-            log_value_predictions(
-                use_wandb, model, train_state, rollout_manager, rng, STR_TO_JAX_ARR,
-            )
+            # log_value_predictions(
+            #     use_wandb, model, train_state, rollout_manager, rng, STR_TO_JAX_ARR,
+            # )
 
             # log_error_vs_counts(
             #     freq_counts=HIGH_FREQ_COUNTS,
@@ -261,21 +261,23 @@ def train_ppo(
             #     use_wandb=use_wandb,
             # )
             # log_counts(counts=counts, use_wandb=use_wandb)
-            (
-                critic_activation_abs_mean,
-                policy_activation_abs_mean,
-                critic_activation_RMS_mean,
-                policy_activation_RMS_mean,
-            ) = log_frequency_stats(train_state, obs)
-            log_critic_mean_abs_activation.append(critic_activation_abs_mean)
-            log_actor_mean_abs_activation.append(policy_activation_abs_mean)
-            log_critic_mean_RMS_activation.append(critic_activation_RMS_mean)
-            log_actor_mean_RMS_activation.append(policy_activation_RMS_mean)
+            if config.SIRENs == True:
+                (
+                    critic_activation_abs_mean,
+                    policy_activation_abs_mean,
+                    critic_activation_RMS_mean,
+                    policy_activation_RMS_mean,
+                ) = log_frequency_stats(train_state, obs)
+                log_histograms(train_state, obs, config)
+                log_critic_mean_abs_activation.append(critic_activation_abs_mean)
+                log_actor_mean_abs_activation.append(policy_activation_abs_mean)
+                log_critic_mean_RMS_activation.append(critic_activation_RMS_mean)
+                log_actor_mean_RMS_activation.append(policy_activation_RMS_mean)
             # log the std dev of the first layer of the policy network
 
             # model.apply(train_state.params, obs, counts, STR_TO_JAX_ARR["mixed"], rng)
 
-            model.apply(train_state.params, obs, STR_TO_JAX_ARR["mixed"], rng)
+            model.apply(train_state.params, obs, rng)
             if mle_log is not None:
                 mle_log.update(
                     {"num_steps": total_steps},
@@ -287,11 +289,11 @@ def train_ppo(
     return (
         log_steps,
         log_return_train,
-        log_return_test,
-        log_td_error_train,
-        log_td_error_test,
-        log_mean_novelty_train,
-        log_mean_novelty_test,
+        # log_return_test,
+        # log_td_error_train,
+        # log_td_error_test,
+        # log_mean_novelty_train,
+        # log_mean_novelty_test,
         log_kl_div,
         log_mse,
         log_critic_mean_abs_activation,

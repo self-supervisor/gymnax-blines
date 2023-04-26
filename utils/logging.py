@@ -21,24 +21,16 @@ def compute_difference_with_perfect_policy(
     training_state: TrainState,
     training_network,
     perfect_network_params,
+    perfect_network,
     obs,
-    counts,
     rng,
 ) -> Tuple[jnp.array, jnp.array]:
     """compute kl divergence between policy predictions and MSE between value predictions"""
-    perfect_network_values, perfect_network_policy = training_network.apply(
-        perfect_network_params,
-        obs,
-        counts,
-        high_low_or_mixed=STR_TO_JAX_ARR["mixed"],
-        rng=rng,
+    perfect_network_values, perfect_network_policy = perfect_network.apply(
+        perfect_network_params, obs, rng=rng,
     )
     training_network_values, training_network_policy = training_network.apply(
-        training_state.params,
-        obs,
-        counts,
-        high_low_or_mixed=STR_TO_JAX_ARR["mixed"],
-        rng=rng,
+        training_state.params, obs, rng=rng,
     )
     training_network_policy_probs = np.array(
         jax.nn.softmax(training_network_policy.logits)
@@ -51,9 +43,7 @@ def compute_difference_with_perfect_policy(
     wandb.log(
         {"kl_div_with_perfect_policy": kl_div, "mse_with_perfect_value_network": MSE}
     )
-    mean_counts = np.mean(counts)
-    wandb.log({"counts": mean_counts})
-    return kl_div, MSE, mean_counts
+    return kl_div, MSE
 
 
 def make_arrows(actions: np.ndarray, all_coordinates: np.ndarray, direction: int):
@@ -220,32 +210,73 @@ def log_counts(counts: np.ndarray, use_wandb: bool):
         wandb.log({"counts": fig})
 
 
-def log_frequency_stats(train_state: TrainState, obs: jnp.array) -> None:
-    critic_initial_weight_matrix = np.array(
-        [i for i in train_state.params.items()][0][1]["critic_fc_1_high_frequency"][
-            "dense"
-        ]["kernel"]
+def save_plotly_to_json(fig, title) -> None:
+    import json
+
+    fig_json = fig.to_json()
+    with open("fig.json", "w") as f:
+        json.dump(fig_json, f)
+
+
+def make_plotly_histogram(datapoints, config, title):
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(x=np.array(datapoints).reshape(-1), name=title))
+    wandb.log({f"{title}_histogram": fig})
+
+    save_plotly_to_json(
+        fig, title=f"three_dim_plots/{config.env_name}_{config.scale}_histogram.json"
     )
-    critic_initial_bias_vector = np.array(
-        [i for i in train_state.params.items()][0][1]["critic_fc_1_high_frequency"][
-            "dense"
-        ]["bias"]
+
+
+def log_median(datapoints, config, title):
+    wandb.log({f"{title}_median": np.median(datapoints)})
+    np.save(
+        f"three_dim_plots/{config.env_name}_{config.scale}_{title}_median.npy",
+        np.median(datapoints),
+    )
+
+
+def log_histograms(train_state: TrainState, obs: jnp.array, config) -> None:
+    if len(obs) > 2:
+        obs = obs.reshape(obs.shape[0], -1)
+    policy_initial_weight_matrix = np.array(
+        [i for i in train_state.params.items()][0][1]["lff_actor"]["dense"]["kernel"]
+    )
+    datapoints = jnp.array(
+        [policy_initial_weight_matrix.T @ obs[i] for i in range(len(obs))]
+    )
+    make_plotly_histogram(datapoints, config, title="policy")
+    log_median(datapoints, config, title="policy")
+
+    critic_initial_weight_matrix = np.array(
+        [i for i in train_state.params.items()][0][1]["lff_actor"]["dense"]["kernel"]
+    )
+    datapoints = jnp.array(
+        [critic_initial_weight_matrix.T @ obs[i] for i in range(len(obs))]
+    )
+    make_plotly_histogram(datapoints, config, title="critic")
+    log_median(datapoints, config, title="critic")
+
+
+def log_frequency_stats(train_state: TrainState, obs: jnp.array) -> None:
+    if len(obs) > 2:
+        obs = obs.reshape(obs.shape[0], -1)
+    critic_initial_weight_matrix = np.array(
+        [i for i in train_state.params.items()][0][1]["lff_critic"]["dense"]["kernel"]
     )
     critic_std = jnp.std(critic_initial_weight_matrix)
     critic_norm = jnp.linalg.norm(critic_initial_weight_matrix)
     critic_average_activation = jnp.mean(
         jnp.abs(
             jnp.array(
-                [
-                    critic_initial_weight_matrix.T @ obs[i] + critic_initial_bias_vector
-                    for i in range(len(obs))
-                ]
+                [critic_initial_weight_matrix.T @ obs[i] for i in range(len(obs))]
             )
         )
     )
     critic_norm_activation = jnp.linalg.norm(
         jnp.array([critic_initial_weight_matrix.T @ obs[i] for i in range(len(obs))])
     )
+
     critic_rms_activation = jnp.sqrt(
         jnp.mean(
             jnp.square(
@@ -259,33 +290,20 @@ def log_frequency_stats(train_state: TrainState, obs: jnp.array) -> None:
         jnp.pi
         * jnp.sin(
             jnp.array(
-                [
-                    critic_initial_weight_matrix.T @ obs[i] + critic_initial_bias_vector
-                    for i in range(len(obs))
-                ]
+                [critic_initial_weight_matrix.T @ obs[i] for i in range(len(obs))]
             )
         )
     )
 
     policy_initial_weight_matrix = np.array(
-        [i for i in train_state.params.items()][0][1]["critic_fc_1_action"]["dense"][
-            "kernel"
-        ]
-    )
-    policy_initial_bias_vector = np.array(
-        [i for i in train_state.params.items()][0][1]["critic_fc_1_action"]["dense"][
-            "bias"
-        ]
+        [i for i in train_state.params.items()][0][1]["lff_actor"]["dense"]["kernel"]
     )
     policy_std = jnp.std(policy_initial_weight_matrix)
     policy_norm = jnp.linalg.norm(policy_initial_weight_matrix)
     policy_average_activation = jnp.mean(
         jnp.abs(
             jnp.array(
-                [
-                    policy_initial_weight_matrix.T @ obs[i] + policy_initial_bias_vector
-                    for i in range(len(obs))
-                ]
+                [policy_initial_weight_matrix.T @ obs[i] for i in range(len(obs))]
             )
         )
     )
@@ -305,32 +323,31 @@ def log_frequency_stats(train_state: TrainState, obs: jnp.array) -> None:
         jnp.pi
         * jnp.sin(
             jnp.array(
-                [
-                    policy_initial_weight_matrix.T @ obs[i] + policy_initial_bias_vector
-                    for i in range(len(obs))
-                ]
+                [policy_initial_weight_matrix.T @ obs[i] for i in range(len(obs))]
             )
         )
     )
 
-    wandb.log({"critic_std": critic_std.item()})
-    wandb.log({"critic_norm": critic_norm.item()})
+    wandb.log({"critic_std": np.array(critic_std)})
+    wandb.log({"critic_norm": np.array(critic_norm)})
 
-    wandb.log({"policy_std": policy_std.item()})
-    wandb.log({"policy_norm": policy_norm.item()})
+    wandb.log({"policy_std": np.array(policy_std)})
+    wandb.log({"policy_norm": np.array(policy_norm)})
 
-    wandb.log({"critic_average_activation": critic_average_activation.item()})
-    wandb.log({"critic_norm_activation": critic_norm_activation.item()})
+    wandb.log({"critic_average_activation": np.array(critic_average_activation)})
+    wandb.log({"critic_norm_activation": np.array(critic_norm_activation)})
 
-    wandb.log({"policy_average_activation": policy_average_activation.item()})
-    wandb.log({"policy_norm_activation": policy_norm_activation.item()})
+    wandb.log({"policy_average_activation": np.array(policy_average_activation)})
+    wandb.log({"policy_norm_activation": np.array(policy_norm_activation)})
 
-    wandb.log({"critic_rms_activation": critic_rms_activation.item()})
-    wandb.log({"policy_rms_activation": policy_rms_activation.item()})
+    wandb.log({"critic_rms_activation": np.array(critic_rms_activation)})
+    wandb.log({"policy_rms_activation": np.array(policy_rms_activation)})
 
-    wandb.log({"critic_after_sin": critic_after_sin.item()})
-    wandb.log({"policy_after_sin": policy_after_sin.item()})
+    wandb.log({"critic_after_sin": np.array(critic_after_sin)})
+    wandb.log({"policy_after_sin": np.array(policy_after_sin)})
 
+    if np.isnan(np.array(critic_after_sin)):
+        jax.debug.breakpoint()
     return (
         critic_average_activation,
         policy_average_activation,

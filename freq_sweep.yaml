@@ -3,30 +3,48 @@ metric:
   goal: maximize
   name: total_return
 parameters:
-  count_switch:
-    values:
-      - 1
-
   scale:
     values:
+      - 0.0000001
+      - 0.000001
+      - 0.00001
+      - 0.0001
+      - 0.001
       - 0.01
-      - 0.05
       - 0.1
-      - 0.5
       - 1
-      - 2
-      - 4
-      - 8
-      - 16
-      - 32
-      - 64
-      - 128
+      - 10
+      - 100
+      - 1000
+      - 10000
+      - 100000
 
-  high_freq_multiplier:
+  config_fname:
     values:
-      - 1
+      # - "agents/Acrobot-v1/ppo.yaml"
+      - "agents/Asterix-MinAtar/ppo.yaml"
+      # - "agents/BernouilliBandit-misc/ppo.yaml"
+      - "agents/Breakout-MinAtar/ppo.yaml"
+      - "agents/CartPole-v1/ppo.yaml"
+      - "agents/Catch-bsuite/ppo.yaml"
+      - "agents/DeepSea-bsuite/ppo.yaml"
+      - "agents/DiscountingChain-bsuite/ppo.yaml"
+      - "agents/FourRooms-misc/ppo.yaml"
+      - "agents/Freeway-MinAtar/ppo.yaml"
+      # - "agents/GaussianBandit-misc/ppo.yaml"
+      # - "agents/MemoryChain-bsuite/ppo.yaml"
+      # - "agents/MetaMaze-misc/ppo.yaml"
+      - "agents/MountainCar-v0/ppo.yaml"
+      # - "agents/Pendulum-v1/ppo.yaml"
+      # - "agents/PointRobot-misc/ppo.yaml"
+      - "agents/SpaceInvaders-MinAtar/ppo.yaml"
+      # - "agents/UmbreallChain-bsuite/ppo.yaml"
+
+
 
   seed:
     values:
       - 1
+      - 2
+      - 3
 program: train.py

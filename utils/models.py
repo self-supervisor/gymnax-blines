@@ -6,7 +6,7 @@ from evosax import NetworkMapper
 from tensorflow_probability.substrates import jax as tfp
 
 
-def get_model_ready(rng, config, scale, speed=False):
+def get_model_ready(rng, config, scale, speed=False, force_ReLU=False):
     """Instantiate a model according to obs shape of environment."""
     # Get number of desired output units
     env, env_params = gymnax.make(config.env_name, **config.env_kwargs)
@@ -25,17 +25,43 @@ def get_model_ready(rng, config, scale, speed=False):
             #     high_freq_multiplier=high_freq_multiplier,
             #     count_switch=count_switch,
             # )
-            model = CategoricalSeparateMLP(
-                **config.network_config,
-                num_output_units=env.num_actions,
-                scale=scale,
-                # high_freq_multiplier=high_freq_multiplier,
-                # count_switch=count_switch,
-            )
+            if force_ReLU == True or config.SIRENs == False:
+                model = CategoricalSeparateMLP(
+                    **config.network_config,
+                    num_output_units=env.num_actions,
+                    scale=scale,
+                    high=env.observation_space(env_params).high,
+                    low=env.observation_space(env_params).low,
+                    # high_freq_multiplier=high_freq_multiplier,
+                    # count_switch=count_switch,
+                )
+            elif config.SIRENs == True:
+                model = CategoricalSeparateMLPSIREN(
+                    **config.network_config,
+                    num_output_units=env.num_actions,
+                    scale=scale,
+                    high=env.observation_space(env_params).high,
+                    low=env.observation_space(env_params).low,
+                    # high_freq_multiplier=high_freq_multiplier,
+                    # count_switch=count_switch,
+                )
         elif config.network_name == "Gaussian-MLP":
-            model = GaussianSeparateMLP(
-                **config.network_config, num_output_units=env.num_actions
-            )
+            if force_ReLU == True or config.SIRENs == False:
+                model = GaussianSeparateMLP(
+                    **config.network_config,
+                    scale=scale,
+                    num_output_units=env.num_actions,
+                    high=env.observation_space(env_params).high,
+                    low=env.observation_space(env_params).low,
+                )
+            elif config.SIRENs == True:
+                model = GaussianSeparateMLPSIREN(
+                    **config.network_config,
+                    scale=scale,
+                    num_output_units=env.num_actions,
+                    high=env.observation_space(env_params).high,
+                    low=env.observation_space(env_params).low,
+                )
 
     # Only use feedforward MLP in speed evaluations!
     if speed and config.network_name == "LSTM":
@@ -103,11 +129,14 @@ class VanillaCategoricalSeparateMLP(nn.Module):
     num_output_units: int
     num_hidden_units: int
     num_hidden_layers: int
+    scale: float
     prefix_actor: str = "actor"
     prefix_critic: str = "critic"
     model_name: str = "separate-mlp"
     flatten_2d: bool = False  # Catch case
     flatten_3d: bool = False  # Rooms/minatar case
+    relu: bool = False
+    not_relu: bool = True
 
     @nn.compact
     def __call__(self, x, rng):
@@ -124,13 +153,13 @@ class VanillaCategoricalSeparateMLP(nn.Module):
         # Flatten a batch of 3d images into a batch of flat vectors
         if self.flatten_3d and len(x.shape) > 3:
             x = x.reshape(x.shape[0], -1)
-        x_v = nn.relu(
-            nn.Dense(
-                self.num_hidden_units,
-                name=self.prefix_critic + "_fc_1",
-                bias_init=default_mlp_init(),
-            )(x)
-        )
+
+        x_v = LFF(
+            num_output_features=self.num_hidden_units,
+            num_input_features=x.shape[-1],
+            name="lff_critic",
+            scale=self.scale,
+        )(x)
         # Loop over rest of intermediate hidden layers
         for i in range(1, self.num_hidden_layers):
             x_v = nn.relu(
@@ -144,6 +173,12 @@ class VanillaCategoricalSeparateMLP(nn.Module):
             1, name=self.prefix_critic + "_fc_v", bias_init=default_mlp_init(),
         )(x_v)
 
+        x_a = LFF(
+            num_output_features=self.num_hidden_units,
+            num_input_features=x.shape[-1],
+            name="lff_critic",
+            scale=self.scale,
+        )(x)
         x_a = nn.relu(nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x))
         # Loop over rest of intermediate hidden layers
         for i in range(1, self.num_hidden_layers):
@@ -156,13 +191,15 @@ class VanillaCategoricalSeparateMLP(nn.Module):
         return v, pi
 
 
-class CategoricalSeparateMLP(nn.Module):
+class CategoricalSeparateMLPSIREN(nn.Module):
     """Split Actor-Critic Architecture for PPO."""
 
     num_output_units: int
     num_hidden_units: int
     num_hidden_layers: int
     scale: float
+    high: jnp.ndarray
+    low: jnp.ndarray
     prefix_actor: str = "actor"
     prefix_critic: str = "critic"
     model_name: str = "separate-mlp"
@@ -186,19 +223,83 @@ class CategoricalSeparateMLP(nn.Module):
         if self.flatten_3d and len(x.shape) > 3:
             x = x.reshape(x.shape[0], -1)
 
+        x = (x - self.low) / (self.high - self.low)
         x_v = LFF(
             num_output_features=self.num_hidden_units,
             num_input_features=x.shape[-1],
-            name=self.prefix_critic + "_siren_critic",
+            name="lff_critic",
             scale=self.scale,
         )(x)
-        # x_v = nn.relu(
-        #     nn.Dense(
-        #         self.num_hidden_units,
-        #         name=self.prefix_critic + "_fc_1",
-        #         bias_init=default_mlp_init(),
-        #     )(x)
-        # )
+        # Loop over rest of intermediate hidden layers
+        for i in range(1, self.num_hidden_layers):
+            x_v = nn.relu(
+                nn.Dense(
+                    self.num_hidden_units,
+                    name=self.prefix_critic + f"_fc_{i+1}",
+                    bias_init=default_mlp_init(),
+                )(x_v)
+            )
+        v = nn.Dense(
+            1, name=self.prefix_critic + "_fc_v", bias_init=default_mlp_init(),
+        )(x_v)
+
+        x_a = LFF(
+            num_output_features=self.num_hidden_units,
+            num_input_features=x.shape[-1],
+            name="lff_actor",
+            scale=self.scale,
+        )(x)
+        # Loop over rest of intermediate hidden layers
+        for i in range(1, self.num_hidden_layers):
+            x_a = nn.relu(
+                nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x_a)
+            )
+        logits = nn.Dense(self.num_output_units, bias_init=default_mlp_init(),)(x_a)
+        # pi = distrax.Categorical(logits=logits)
+        pi = tfp.distributions.Categorical(logits=logits)
+        return v, pi
+
+
+class CategoricalSeparateMLP(nn.Module):
+    """Split Actor-Critic Architecture for PPO."""
+
+    num_output_units: int
+    num_hidden_units: int
+    num_hidden_layers: int
+    scale: float
+    high: jnp.ndarray
+    low: jnp.ndarray
+    prefix_actor: str = "actor"
+    prefix_critic: str = "critic"
+    model_name: str = "separate-mlp"
+    flatten_2d: bool = False  # Catch case
+    flatten_3d: bool = False  # Rooms/minatar case
+    # count_switch: int = int(2e3)
+
+    @nn.compact
+    def __call__(self, x, rng):
+        # Flatten a single 2D image
+        if self.flatten_2d and len(x.shape) == 2:
+            x = x.reshape(-1)
+        # Flatten a batch of 2d images into a batch of flat vectors
+        if self.flatten_2d and len(x.shape) > 2:
+            x = x.reshape(x.shape[0], -1)
+
+        # Flatten a single 3D image
+        if self.flatten_3d and len(x.shape) == 3:
+            x = x.reshape(-1)
+        # Flatten a batch of 3d images into a batch of flat vectors
+        if self.flatten_3d and len(x.shape) > 3:
+            x = x.reshape(x.shape[0], -1)
+
+        x = (x - self.low) / (self.high - self.low)
+        x_v = nn.relu(
+            nn.Dense(
+                self.num_hidden_units,
+                name=self.prefix_critic + "_fc_1",
+                bias_init=default_mlp_init(),
+            )(x)
+        )
         # Loop over rest of intermediate hidden layers
         for i in range(1, self.num_hidden_layers):
             x_v = nn.relu(
@@ -213,12 +314,6 @@ class CategoricalSeparateMLP(nn.Module):
         )(x_v)
 
         x_a = nn.relu(nn.Dense(self.num_hidden_units, bias_init=default_mlp_init(),)(x))
-        x_a = LFF(
-            num_output_features=self.num_hidden_units,
-            num_input_features=x.shape[-1],
-            name=self.prefix_critic + "_lff_actor",
-            scale=self.scale,
-        )(x)
         # Loop over rest of intermediate hidden layers
         for i in range(1, self.num_hidden_layers):
             x_a = nn.relu(
@@ -450,12 +545,15 @@ class CategoricalSeparateMLP(nn.Module):
 #         # return v, pi
 
 
-class GaussianSeparateMLP(nn.Module):
+class GaussianSeparateMLPSIREN(nn.Module):
     """Split Actor-Critic Architecture for PPO."""
 
     num_output_units: int
     num_hidden_units: int
     num_hidden_layers: int
+    scale: float
+    high: jnp.ndarray
+    low: jnp.ndarray
     prefix_actor: str = "actor"
     prefix_critic: str = "critic"
     min_std: float = 0.001
@@ -463,6 +561,81 @@ class GaussianSeparateMLP(nn.Module):
 
     @nn.compact
     def __call__(self, x, rng):
+        # x_v = nn.relu(
+        #     nn.Dense(
+        #         self.num_hidden_units,
+        #         name=self.prefix_critic + "_fc_1",
+        #         bias_init=default_mlp_init(),
+        #     )(x)
+        # )
+
+        x = (x - self.low) / (self.high - self.low)
+        x_v = LFF(
+            num_output_features=self.num_hidden_units,
+            num_input_features=x.shape[-1],
+            name="lff_critic",
+            scale=self.scale,
+        )(x)
+        # Loop over rest of intermediate hidden layers
+        for i in range(1, self.num_hidden_layers):
+            x_v = nn.relu(
+                nn.Dense(
+                    self.num_hidden_units,
+                    name=self.prefix_critic + f"_fc_{i+1}",
+                    bias_init=default_mlp_init(),
+                )(x_v)
+            )
+        v = nn.Dense(
+            1, name=self.prefix_critic + "_fc_v", bias_init=default_mlp_init(),
+        )(x_v)
+
+        x_a = LFF(
+            num_output_features=self.num_hidden_units,
+            num_input_features=x.shape[-1],
+            name="lff_actor",
+            scale=self.scale,
+        )(x)
+        # Loop over rest of intermediate hidden layers
+        for i in range(1, self.num_hidden_layers):
+            x_a = nn.relu(
+                nn.Dense(
+                    self.num_hidden_units,
+                    name=self.prefix_actor + f"_fc_{i+1}",
+                    bias_init=default_mlp_init(),
+                )(x_a)
+            )
+        mu = nn.Dense(
+            self.num_output_units,
+            name=self.prefix_actor + "_fc_mu",
+            bias_init=default_mlp_init(),
+        )(x_a)
+        log_scale = nn.Dense(
+            self.num_output_units,
+            name=self.prefix_actor + "_fc_scale",
+            bias_init=default_mlp_init(),
+        )(x_a)
+        scale = jax.nn.softplus(log_scale) + self.min_std
+        pi = tfp.distributions.MultivariateNormalDiag(mu, scale)
+        return v, pi
+
+
+class GaussianSeparateMLP(nn.Module):
+    """Split Actor-Critic Architecture for PPO."""
+
+    num_output_units: int
+    num_hidden_units: int
+    num_hidden_layers: int
+    scale: float
+    high: jnp.ndarray
+    low: jnp.ndarray
+    prefix_actor: str = "actor"
+    prefix_critic: str = "critic"
+    min_std: float = 0.001
+    model_name: str = "separate-mlp"
+
+    @nn.compact
+    def __call__(self, x, rng):
+        x = (x - self.low) / (self.high - self.low)
         x_v = nn.relu(
             nn.Dense(
                 self.num_hidden_units,
@@ -483,6 +656,7 @@ class GaussianSeparateMLP(nn.Module):
             1, name=self.prefix_critic + "_fc_v", bias_init=default_mlp_init(),
         )(x_v)
 
+        # Loop over rest of intermediate hidden layers
         x_a = nn.relu(
             nn.Dense(
                 self.num_hidden_units,
@@ -490,7 +664,6 @@ class GaussianSeparateMLP(nn.Module):
                 bias_init=default_mlp_init(),
             )(x)
         )
-        # Loop over rest of intermediate hidden layers
         for i in range(1, self.num_hidden_layers):
             x_a = nn.relu(
                 nn.Dense(
