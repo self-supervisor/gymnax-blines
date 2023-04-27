@@ -95,8 +95,8 @@ def main(
         wandb.log({"total_return_train": np.sum(log_return_train)})
         # wandb.log({"total_return_train": np.sum(log_return_test)})
 
-    # np.save(f"three_dim_plots/{scale}_kl_div.npy", np.array(log_kl_div))
-    # np.save(f"three_dim_plots/{scale}_MSE.npy", np.array(log_MSE))
+    np.save(f"three_dim_plots/{scale}_kl_div.npy", np.array(log_kl_div))
+    np.save(f"three_dim_plots/{scale}_MSE.npy", np.array(log_MSE))
     np.save(f"three_dim_plots/{config.env_name}_{scale}_steps.npy", np.array(log_steps))
     # np.save(
     #     f"three_dim_plots/{scale}_log_mean_novelty_training.npy",
