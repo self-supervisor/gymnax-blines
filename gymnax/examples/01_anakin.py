@@ -4,7 +4,8 @@ os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=1"
 import jax
 from jax import random
 from jax import numpy as jnp
-from utils import TimeIt, make_gif, TimeStep
+from utils import TimeIt, TimeStep
+from evaluate import evaluate
 
 print("devices", jax.devices())
 import gymnax
@@ -141,10 +142,11 @@ def run_experiment(env, batch_size, rollout_len, step_size, iterations, seed):
 
 def main():
     print("Running on", len(jax.devices()), "cores.", flush=True)
-    batch_params = run_experiment(env, 128, 16, 3e-4, 10000, 42)
+    batch_params = run_experiment(env, 128, 16, 3e-4, 1000, 42)
     # Get model ready for evaluation - squeeze broadcasted params
     network = get_network_fn(env.num_actions)
     forward_transition_model = get_transition_model_fn(600)
+    backward_transition_model = get_transition_model_fn(600)
     squeeze = lambda x: x[0][0]
     (
         network_params,
@@ -154,44 +156,17 @@ def main():
 
     rng = jax.random.PRNGKey(0)
 
-    from tqdm import tqdm
-
-    obs, state = env.reset(rng)
-    cum_ret = 0
-
-    ground_truth_obs = []
-    pred_obs = []
-    for step in tqdm(range(env_params.max_steps_in_episode)):
-        rng, key_step = jax.random.split(rng)
-        q_values = network.apply(network_params, obs[None,], None)
-        action = jnp.argmax(q_values)
-        n_obs, n_state, reward, done, _ = env.step(key_step, state, action, env_params)
-        pred_obs.append(
-            forward_transition_model.apply(
-                forward_transition_model_params,
-                jnp.concatenate((obs.reshape(-1), jnp.array([action]).reshape(-1)))[
-                    None,
-                ],
-                None,
-            )
-        )
-        ground_truth_obs.append(n_obs)
-        cum_ret += reward
-
-        if done:
-            break
-        else:
-            state = n_state
-            obs = n_obs
-
-    import numpy as np
-
-    np.save("ground_truth_obs.npy", np.array(ground_truth_obs))
-    np.save(
-        "pred_obs.npy", np.array(pred_obs).reshape(len(ground_truth_obs), 10, 10, -1)
+    evaluate(
+        network,
+        network_params,
+        forward_transition_model,
+        forward_transition_model_params,
+        backward_transition_model,
+        backward_transition_model_params,
+        env,
+        env_params,
+        rng,
     )
-
-    make_gif()
 
 
 if __name__ == "__main__":
