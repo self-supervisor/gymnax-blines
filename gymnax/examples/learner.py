@@ -1,9 +1,10 @@
-import jax.numpy as jnp
-from utils import TimeStep
-import optax
-from jax import lax, random
-import rlax
 import jax
+import jax.numpy as jnp
+import optax
+import rlax
+from jax import lax, random
+
+from utils import TimeStep
 
 
 def get_learner_fn(
@@ -76,7 +77,7 @@ def get_learner_fn(
             v_t=jnp.max(rollout.q_values[1:], axis=-1),  # bootstrap values.
             lambda_=lambda_,
         )  # mixing hyper-parameter lambda.
-        q_learning_loss = jnp.mean(td_error ** 2)  # mean squared error.
+        q_learning_loss = jnp.mean(td_error**2)  # mean squared error.
         forward_transition_model_loss = jnp.mean(
             jnp.sum(
                 (

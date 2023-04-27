@@ -2,18 +2,20 @@ import os
 
 os.environ["XLA_FLAGS"] = "--xla_force_host_platform_device_count=1"
 import jax
-from jax import random
 from jax import numpy as jnp
-from utils import TimeIt, TimeStep
+from jax import random
+
 from evaluate import evaluate
+from utils import TimeIt
 
 print("devices", jax.devices())
 import gymnax
-from flax.serialization import to_state_dict, from_state_dict
+import optax
+from flax.serialization import to_state_dict
 from gymnax.environments.minatar.space_invaders import EnvState
+
 from learner import get_learner_fn
 from models import get_network_fn, get_transition_model_fn
-import optax
 
 env, env_params = gymnax.make("SpaceInvaders-MinAtar")
 print("devices", jax.devices())
@@ -31,9 +33,7 @@ def run_experiment(env, batch_size, rollout_len, step_size, iterations, seed):
 
     rng, rng_e, rng_p, rng_t = random.split(random.PRNGKey(seed), num=4)  # prng keys.
     obs, state = env.reset(rng_e)
-    dummy_obs = obs[
-        None,
-    ]  # dummy for net init.
+    dummy_obs = obs[None,]  # dummy for net init.
     dummy_obs_and_action = jnp.concatenate(
         (obs.reshape(-1), jnp.array([0]).reshape(-1))
     )  # dummy for net init.
