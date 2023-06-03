@@ -36,11 +36,54 @@ def policy(
     return value, pi
 
 
+from gymnax.environments import environment, spaces
+import chex
+import numpy as np
+
+
+class GymnaxWrapper(object):
+    """Base class for Gymnax wrappers."""
+
+    def __init__(self, env):
+        self._env = env
+
+    # provide proxy access to regular attributes of wrapped object
+    def __getattr__(self, name):
+        return getattr(self._env, name)
+
+
+class RewardPertubationWrapper(GymnaxWrapper):
+    """Flatten the observations of the environment."""
+
+    def __init__(
+        self, env: environment.Environment, perturbation_multiplier: float = 1
+    ):
+        super().__init__(env)
+        self.pertubation_multiplier = perturbation_multiplier
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(
+        self,
+        key: chex.PRNGKey,
+        state: environment.EnvState,
+        action: Union[int, float],
+        params: Optional[environment.EnvParams] = None,
+    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
+        obs, state, reward, done, info = self._env.step(key, state, action, params)
+        key, pertubation_key = jax.random.split(key)
+        reward = reward + self.pertubation_multiplier * jax.random.normal(
+            pertubation_key,
+            shape=reward.shape,
+        )
+        return obs, state, reward, done, info
+
+
 class RolloutManager(object):
     def __init__(self, model, env_name, env_kwargs, env_params):
         # Setup functionalities for vectorized batch rollout
         self.env_name = env_name
         self.env, self.env_params = gymnax.make(env_name, **env_kwargs)
+        self.env = RewardPertubationWrapper(self.env)
         self.env_params = self.env_params.replace(**env_params)
         self.observation_space = self.env.observation_space(self.env_params)
         self.action_size = self.env.action_space(self.env_params).shape
@@ -49,7 +92,10 @@ class RolloutManager(object):
 
     @partial(jax.jit, static_argnums=0)
     def select_action_ppo(
-        self, train_state: TrainState, obs: jnp.ndarray, rng: jax.random.PRNGKey,
+        self,
+        train_state: TrainState,
+        obs: jnp.ndarray,
+        rng: jax.random.PRNGKey,
     ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jax.random.PRNGKey]:
         value, pi = policy(train_state.apply_fn, train_state.params, obs, rng)
         action = pi.sample(seed=rng)
@@ -79,12 +125,21 @@ class RolloutManager(object):
             rng, rng_step, rng_net = jax.random.split(rng, 3)
             action, _, _, rng = self.select_action(train_state, obs, rng_net)
             next_o, next_s, reward, done, _ = self.batch_step(
-                jax.random.split(rng_step, num_envs), state, action.squeeze(),
+                jax.random.split(rng_step, num_envs),
+                state,
+                action.squeeze(),
             )
             new_cum_reward = cum_reward + reward * valid_mask
             new_valid_mask = valid_mask * (1 - done)
             carry, y = (
-                [next_o, next_s, train_state, rng, new_cum_reward, new_valid_mask,],
+                [
+                    next_o,
+                    next_s,
+                    train_state,
+                    rng,
+                    new_cum_reward,
+                    new_valid_mask,
+                ],
                 [new_valid_mask],
             )
             return carry, y

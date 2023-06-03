@@ -16,6 +16,7 @@ from gymnax.environments.minatar.space_invaders import EnvState
 
 from learner import get_learner_fn
 from models import get_network_fn, get_transition_model_fn
+import pickle
 
 env, env_params = gymnax.make("SpaceInvaders-MinAtar")
 print("devices", jax.devices())
@@ -33,7 +34,9 @@ def run_experiment(env, batch_size, rollout_len, step_size, iterations, seed):
 
     rng, rng_e, rng_p, rng_t = random.split(random.PRNGKey(seed), num=4)  # prng keys.
     obs, state = env.reset(rng_e)
-    dummy_obs = obs[None,]  # dummy for net init.
+    dummy_obs = obs[
+        None,
+    ]  # dummy for net init.
     dummy_obs_and_action = jnp.concatenate(
         (obs.reshape(-1), jnp.array([0]).reshape(-1))
     )  # dummy for net init.
@@ -142,7 +145,7 @@ def run_experiment(env, batch_size, rollout_len, step_size, iterations, seed):
 
 def main():
     print("Running on", len(jax.devices()), "cores.", flush=True)
-    batch_params = run_experiment(env, 128, 16, 3e-4, 1000, 42)
+    batch_params = run_experiment(env, 128, 16, 3e-4, 10000, 42)
     # Get model ready for evaluation - squeeze broadcasted params
     network = get_network_fn(env.num_actions)
     forward_transition_model = get_transition_model_fn(600)
@@ -155,6 +158,14 @@ def main():
     ) = jax.tree_map(squeeze, batch_params)
 
     rng = jax.random.PRNGKey(0)
+
+    # save all params
+    with open("network_params.pkl", "wb") as f:
+        pickle.dump(network_params, f)
+    with open("forward_transition_model_params.pkl", "wb") as f:
+        pickle.dump(forward_transition_model_params, f)
+    with open("backward_transition_model_params.pkl", "wb") as f:
+        pickle.dump(backward_transition_model_params, f)
 
     evaluate(
         network,
